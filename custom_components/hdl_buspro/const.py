@@ -22,7 +22,8 @@ CONF_DOORBELLS: Final = "doorbells"  # 需要暴露成门铃 binary_sensor 的�
 DEFAULT_PORT: Final = 6000
 DEFAULT_SCAN_SUBNET: Final = 1
 SCAN_DEVICE_RANGE: Final = 250  # 扫描 1..250
-SCAN_WINDOW: Final = 2.5  # 秒，一次性发出全部探测包后统一收应答
+SCAN_WINDOW: Final = 2.5  # 秒，发完探测包后收应答的时间窗
+SCAN_PACKET_GAP: Final = 0.02  # 秒，发包间隔；真机实测 >50 包/秒会大量丢包
 
 DEVICE_KIND_RELAY: Final = "relay"
 DEVICE_KIND_SENSOR: Final = "sensor"
