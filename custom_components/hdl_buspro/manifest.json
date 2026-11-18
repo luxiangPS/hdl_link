@@ -1,0 +1,14 @@
+{
+  "domain": "hdl_buspro",
+  "name": "HDL Buspro",
+  "codeowners": ["@HDL"],
+  "config_flow": true,
+  "documentation": "https://github.com/HDL/hdl_buspro",
+  "integration_type": "hub",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/HDL/hdl_buspro/issues",
+  "loggers": ["custom_components.hdl_buspro"],
+  "quality_scale": "bronze",
+  "requirements": [],
+  "version": "1.0.0"
+}
