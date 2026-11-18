@@ -16,6 +16,7 @@ from .const import (
     CONF_GW_ID,
     CONF_GW_NAME,
     CONF_HOST,
+    CONF_LOCAL_SECRET,
     CONF_POLL_INTERVAL,
     CONF_PORT,
     CONF_SCENES,
@@ -82,6 +83,7 @@ class HdlLinkConfigFlow(ConfigFlow, domain=DOMAIN):
         self._functions: list[FunctionInfo] = []
         self._scenes: list[dict[str, Any]] = []
         self._selected: list[str] = []
+        self._local_secret: str = ""
 
     # ---------------------------------------------------------------- 第 1 步
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
@@ -173,7 +175,7 @@ class HdlLinkConfigFlow(ConfigFlow, domain=DOMAIN):
                     },
                 )
             self._selected = picked
-            return await self.async_step_scenes()
+            return await self.async_step_secret()
 
         return self.async_show_form(
             step_id="entities",
@@ -209,6 +211,18 @@ class HdlLinkConfigFlow(ConfigFlow, domain=DOMAIN):
         )
 
     # ---------------------------------------------------------------- 第 3 步
+    async def async_step_secret(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """可选的本地加密密钥：填了才解析网关主动上报（实时状态），不填则纯轮询。"""
+        if user_input is not None:
+            self._local_secret = str(user_input.get(CONF_LOCAL_SECRET) or "").strip()
+            return await self.async_step_scenes()
+        return self.async_show_form(
+            step_id="secret",
+            data_schema=vol.Schema({vol.Optional(CONF_LOCAL_SECRET, default=""): str}),
+            errors={},
+        )
+
+    # ---------------------------------------------------------------- 第 4 步
     async def async_step_scenes(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """勾选网关内的场景（每个场景生成一个按钮实体）。"""
         if user_input is not None:
@@ -277,6 +291,7 @@ class HdlLinkConfigFlow(ConfigFlow, domain=DOMAIN):
             CONF_ENTITIES: entities,
             CONF_SCENES: scenes,
             CONF_POLL_INTERVAL: DEFAULT_POLL_INTERVAL,
+            CONF_LOCAL_SECRET: self._local_secret,
         }
 
     # ---------------------------------------------------------------- 去重
@@ -303,10 +318,9 @@ class HdlLinkOptionsFlow(OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         if user_input is not None:
             return self.async_create_entry(data=user_input)
-        current = self.config_entry.options.get(
-            CONF_POLL_INTERVAL,
-            self.config_entry.data.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL),
-        )
+        merged = {**self.config_entry.data, **self.config_entry.options}
+        current = merged.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL)
+        secret = merged.get(CONF_LOCAL_SECRET, "")
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
@@ -316,7 +330,8 @@ class HdlLinkOptionsFlow(OptionsFlow):
                             min=MIN_POLL_INTERVAL, max=MAX_POLL_INTERVAL, step=1, unit_of_measurement="秒",
                             mode=selector.NumberSelectorMode.BOX,
                         )
-                    )
+                    ),
+                    vol.Optional(CONF_LOCAL_SECRET, default=secret or ""): str,
                 }
             ),
             description_placeholders={"host": self.config_entry.data.get(CONF_HOST, "")},

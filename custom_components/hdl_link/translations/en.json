@@ -2,50 +2,58 @@
   "config": {
     "step": {
       "user": {
-        "title": "选择 HDL 网关",
-        "description": "已在当前网络中发现 {count} 台 HDL 网关（LINK 协议，TCP 8586）。选择要接入的网关；若未发现，请选「手动输入网关 IP」。",
+        "title": "Select an HDL gateway",
+        "description": "Found {count} HDL gateway(s) on this network (LINK protocol, TCP 8586). Pick the gateway to connect, or choose \"Enter gateway IP manually\" if nothing was found.",
         "data": {
-          "gateway": "网关"
+          "gateway": "Gateway"
         }
       },
       "manual": {
-        "title": "手动输入网关 IP",
-        "description": "输入 HDL 主网关（MGWIP/LINK 网关）的局域网 IP。集成会用 LINK 协议读取网关内部的设备功能与场景清单，不需要填写总线子网号。",
+        "title": "Enter gateway IP manually",
+        "description": "Enter the LAN IP of the HDL main gateway (MGWIP / LINK gateway). The integration reads the function and scene lists from the gateway itself, so no bus subnet number is required.",
         "data": {
-          "host": "网关 IP"
+          "host": "Gateway IP"
         }
       },
       "entities": {
-        "title": "选择要接入的功能",
-        "description": "网关 {host}（{oid}）共 {total} 个功能，其中 {supported} 个可直接接入，{unsupported} 个类型暂不支持。列表来自网关内的功能清单，而不是扫描到的设备。",
+        "title": "Select functions",
+        "description": "Gateway {host} ({oid}) exposes {total} functions: {supported} supported, {unsupported} with an unsupported type. The list comes from the gateway function table, not from scanned devices.",
         "data": {
-          "entities": "功能"
+          "entities": "Functions"
+        }
+      },
+      "secret": {
+        "title": "Local encryption key (optional)",
+        "description": "The gateway pushes property updates as local-encrypted payloads. Paste the 16-character content of /hdlFamily/config/localSecret.sys to decode them in real time. Leave empty to rely on polling only; control and state still work.",
+        "data": {
+          "local_secret": "localSecret (16 chars)"
         }
       },
       "scenes": {
-        "title": "选择场景",
-        "description": "网关内共发现 {count} 个场景，勾选后会生成对应的场景按钮。可留空。",
+        "title": "Select scenes",
+        "description": "Found {count} scene(s) on the gateway. Selected scenes become scene buttons. You may leave it empty.",
         "data": {
-          "scenes": "场景"
+          "scenes": "Scenes"
         }
       }
     },
     "error": {
-      "cannot_connect": "无法连接该网关：请确认 IP、网络互通，且 8586 端口可达。",
-      "no_functions": "已连上网关，但网关内没有读到任何功能。请确认网关工程已配置设备功能。",
-      "no_selection": "请至少勾选一个功能。"
+      "cannot_connect": "Cannot reach the gateway: check the IP, network reachability and that TCP 8586 is open.",
+      "no_functions": "Connected, but no function was returned. Make sure the gateway project has devices configured.",
+      "no_selection": "Select at least one function."
     },
     "abort": {
-      "already_configured": "该网关已经完成接入。"
+      "already_configured": "This gateway is already configured."
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "HDL LINK 选项",
-        "description": "网关 {host}：可调整状态轮询周期。",
+        "title": "HDL LINK options",
+        "description": "Gateway {host}: adjust the polling interval, or set the local encryption key to enable live push updates.",
         "data": {
-          "poll_interval": "轮询周期"
+          "poll_interval": "Poll interval",
+          "local_secret": "localSecret (16 chars, optional)"
         }
       }
     }

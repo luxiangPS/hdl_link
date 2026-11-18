@@ -58,10 +58,12 @@ class FunctionInfo:
 class HdlGateway:
     """一个网关连接上的 LINK 操作集合（异步、非阻塞）。"""
 
-    def __init__(self, host: str, oid: str | None = None, port: int = 8586) -> None:
+    def __init__(
+        self, host: str, oid: str | None = None, port: int = 8586, local_secret: str | None = None
+    ) -> None:
         self.host = host
         self.oid = oid or ""
-        self.client = LinkClient(host, port)
+        self.client = LinkClient(host, port, local_secret=local_secret)
         self.info: GatewayInfo | None = None
 
     # -------------------------------------------------------------- 发现

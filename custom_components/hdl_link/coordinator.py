@@ -15,6 +15,7 @@ from .const import (
     CONF_GW_ID,
     CONF_GW_NAME,
     CONF_HOST,
+    CONF_LOCAL_SECRET,
     CONF_POLL_INTERVAL,
     CONF_PORT,
     DEFAULT_POLL_INTERVAL,
@@ -42,7 +43,12 @@ class HdlCoordinator(DataUpdateCoordinator[dict[str, dict[str, str]]]):
         self.entry = entry
         self.gw_id: str = str(data.get(CONF_GW_ID) or "")
         self.gw_name: str = str(data.get(CONF_GW_NAME) or data.get(CONF_HOST))
-        self.gateway = HdlGateway(str(data[CONF_HOST]), self.gw_id, int(data.get(CONF_PORT, DEFAULT_PORT)))
+        self.gateway = HdlGateway(
+            str(data[CONF_HOST]),
+            self.gw_id,
+            int(data.get(CONF_PORT, DEFAULT_PORT)),
+            local_secret=str(data.get(CONF_LOCAL_SECRET) or "") or None,
+        )
         # sid -> 实体配置
         self.entities: dict[str, dict[str, Any]] = {
             str(item["sid"]): item for item in data.get(CONF_ENTITIES, []) if item.get("sid")
@@ -54,6 +60,8 @@ class HdlCoordinator(DataUpdateCoordinator[dict[str, dict[str, str]]]):
 
     # ------------------------------------------------------------------ 连接
     async def async_connect(self) -> None:
+        # 网关主动上报（已解密）直接并入实体状态，配合低频轮询兜底
+        self.gateway.client.push_handler = self._on_push
         info = await self.gateway.async_connect()
         if info and info.oid:
             self.gw_id = info.oid
@@ -67,6 +75,27 @@ class HdlCoordinator(DataUpdateCoordinator[dict[str, dict[str, str]]]):
 
     async def async_close(self) -> None:
         await self.gateway.async_close()
+
+    def _on_push(self, objects: list[dict[str, Any]]) -> None:
+        """处理网关上报：把 status 合并进实体状态并推给实体。"""
+        data = dict(self.data or {})
+        changed = False
+        for obj in objects:
+            sid = str(obj.get("sid") or "")
+            if not sid or sid not in self.entities:
+                continue
+            status = obj.get("status") or []
+            values = {str(x.get("key")): str(x.get("value")) for x in status if x.get("key")}
+            if not values:
+                continue
+            current = dict(data.get(sid) or {})
+            if current == {**current, **values}:
+                continue
+            current.update(values)
+            data[sid] = current
+            changed = True
+        if changed:
+            self.async_set_updated_data(data)
 
     # ------------------------------------------------------------------ 轮询
     async def _async_update_data(self) -> dict[str, dict[str, str]]:

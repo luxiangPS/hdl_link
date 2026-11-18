@@ -16,12 +16,40 @@ import json
 import logging
 import re
 import time
-from typing import Any
+from typing import Any, Callable
 
 LOGGER = logging.getLogger(__name__)
 
 _HEADER = re.compile(rb"Topic:(.*?)\r\nLength:\s*(\d+)\r\n\r\n")
 _PORT = 8586
+_UP_SUFFIX = "/thing/property/up"
+
+
+def decrypt_up_frame(raw: bytes, secret: str) -> dict[str, Any] | None:
+    """解开网关的本地加密上报帧（AES-128-CBC，key=iv=localSecret，整帧密文）。
+
+    secret 即网关 /hdlFamily/config/localSecret.sys 的 16 位内容。
+    失败时返回 None，由调用方回退到轮询值。
+    """
+    try:
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    except ImportError:  # pragma: no cover
+        LOGGER.warning("缺少 cryptography，无法解析本地加密上报")
+        return None
+    key = secret.encode("utf-8")
+    if len(key) != 16 or len(raw) % 16 != 0 or not raw:
+        return None
+    decryptor = Cipher(algorithms.AES(key), modes.CBC(key)).decryptor()
+    plain = decryptor.update(raw) + decryptor.finalize()
+    pad = plain[-1]
+    if 1 <= pad <= 16 and plain[-pad:] == bytes([pad]) * pad:
+        plain = plain[:-pad]
+    try:
+        body = json.loads(plain.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        LOGGER.debug("上报帧解密后仍不是 JSON: %.80s", plain)
+        return None
+    return body if isinstance(body, dict) else None
 
 
 def encode_frame(topic: str, body: dict[str, Any]) -> bytes:
@@ -61,10 +89,19 @@ class LinkError(Exception):
 class LinkClient:
     """到 HDL 网关的 LINK TCP 客户端，自带编号/匹配与断线重连。"""
 
-    def __init__(self, host: str, port: int = _PORT, timeout: float = 6.0) -> None:
+    def __init__(
+        self,
+        host: str,
+        port: int = _PORT,
+        timeout: float = 6.0,
+        local_secret: str | None = None,
+    ) -> None:
         self.host = host
         self.port = port
         self.timeout = timeout
+        self.local_secret = (local_secret or "").strip() or None
+        # 网关主动上报（已解密）的回调：objects 列表
+        self.push_handler: Callable[[list[dict[str, Any]]], None] | None = None
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
         self._reader_task: asyncio.Task[None] | None = None
@@ -134,12 +171,26 @@ class LinkClient:
             self._pending.clear()
 
     def _dispatch(self, topic: str, raw: bytes) -> None:
+        body: dict[str, Any] | None = None
         try:
-            body = json.loads(raw)
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                body = parsed
         except (ValueError, UnicodeDecodeError):
-            return
-        if not isinstance(body, dict):
-            return
+            body = None
+
+        if body is None:
+            # 网关主动上报为本地加密二进制，用 localSecret 解密后再当明文处理
+            if topic.endswith(_UP_SUFFIX) and self.local_secret:
+                body = decrypt_up_frame(raw, self.local_secret)
+                if body is None:
+                    LOGGER.debug("上报帧解密失败，长度 %d", len(raw))
+                    return
+            else:
+                if topic.endswith(_UP_SUFFIX):
+                    LOGGER.debug("收到加密上报但未配置 localSecret，跳过")
+                return
+
         msg_id = body.get("id")
         fut = self._pending.get(str(msg_id)) if msg_id is not None else None
         if fut is not None and not fut.done():
@@ -148,8 +199,13 @@ class LinkClient:
         if topic.endswith("_reply"):
             LOGGER.debug("未匹配的响应 %s: %.200s", topic, raw)
             return
-        # 主动上报（网关用加密载荷推送，本集成不解析，靠轮询取状态）
-        LOGGER.debug("网关主动上报 %s（未解析）", topic)
+        # 主动上报：交给协调器刷新实体状态（无需 10s 轮询即可跟手）
+        objects = body.get("objects")
+        if objects and self.push_handler is not None:
+            try:
+                self.push_handler(objects if isinstance(objects, list) else [objects])
+            except Exception as err:  # noqa: BLE001 - 回调异常不能影响读线程
+                LOGGER.debug("处理上报失败: %s", err)
 
     # ------------------------------------------------------------------ 请求
     async def async_request(

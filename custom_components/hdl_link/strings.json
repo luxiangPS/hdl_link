@@ -22,6 +22,13 @@
           "entities": "功能"
         }
       },
+      "secret": {
+        "title": "本地加密密钥（可选）",
+        "description": "网关的主动状态上报是本地加密的。填入网关 /hdlFamily/config/localSecret.sys 的 16 位内容后，集成可实时解析上报；留空则只按轮询周期取状态（功能不受影响）。",
+        "data": {
+          "local_secret": "localSecret（16 位）"
+        }
+      },
       "scenes": {
         "title": "选择场景",
         "description": "网关内共发现 {count} 个场景，勾选后会生成对应的场景按钮。可留空。",
@@ -43,9 +50,10 @@
     "step": {
       "init": {
         "title": "HDL LINK 选项",
-        "description": "网关 {host}：可调整状态轮询周期。",
+        "description": "网关 {host}：可调整状态轮询周期，或填写本地加密密钥以启用实时上报。",
         "data": {
-          "poll_interval": "轮询周期"
+          "poll_interval": "轮询周期",
+          "local_secret": "localSecret（16 位，可留空）"
         }
       }
     }
