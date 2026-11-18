@@ -1,4 +1,4 @@
-"""数据协调器：一个配置条目一个网关连接，批量轮询属性。"""
+"""数据协调器：一个配置条目一个网关连接；状态由网关主动上报驱动。"""
 
 from __future__ import annotations
 
@@ -33,12 +33,17 @@ class HdlCoordinator(DataUpdateCoordinator[dict[str, dict[str, str]]]):
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         data = {**entry.data, **entry.options}
-        interval = int(data.get(CONF_POLL_INTERVAL) or DEFAULT_POLL_INTERVAL)
+        raw_interval = data.get(CONF_POLL_INTERVAL)
+        try:
+            interval = int(raw_interval) if raw_interval not in (None, "") else DEFAULT_POLL_INTERVAL
+        except (TypeError, ValueError):
+            interval = DEFAULT_POLL_INTERVAL
+        # 0 表示不做周期轮询：网关会主动上报状态变化，实体只在收到上报或手动刷新时更新
         super().__init__(
             hass,
             LOGGER,
             name=f"{DOMAIN}-{data.get(CONF_HOST)}",
-            update_interval=timedelta(seconds=interval),
+            update_interval=timedelta(seconds=interval) if interval > 0 else None,
         )
         self.entry = entry
         self.gw_id: str = str(data.get(CONF_GW_ID) or "")
@@ -60,7 +65,7 @@ class HdlCoordinator(DataUpdateCoordinator[dict[str, dict[str, str]]]):
 
     # ------------------------------------------------------------------ 连接
     async def async_connect(self) -> None:
-        # 网关主动上报（已解密）直接并入实体状态，配合低频轮询兜底
+        # 网关主动上报（已解密）直接并入实体状态；默认不轮询，只在启动与手动刷新时读取全量
         self.gateway.client.push_handler = self._on_push
         info = await self.gateway.async_connect()
         if info and info.oid:

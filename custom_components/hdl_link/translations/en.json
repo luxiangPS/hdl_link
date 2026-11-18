@@ -50,9 +50,9 @@
     "step": {
       "init": {
         "title": "HDL LINK options",
-        "description": "Gateway {host}: adjust the polling interval, or set the local encryption key to enable live push updates.",
+        "description": "Gateway {host}: device state changes are pushed by the gateway, so no polling is needed. Optionally set a fallback poll interval (seconds); 0 disables polling.",
         "data": {
-          "poll_interval": "Poll interval",
+          "poll_interval": "Fallback poll interval (s, 0 = off)",
           "local_secret": "Local encryption key (16 chars, optional)"
         }
       }

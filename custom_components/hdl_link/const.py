@@ -21,8 +21,8 @@ CONF_LOCAL_SECRET: Final = "local_secret"   # 可选：网关本地加密密钥�
 
 DEFAULT_PORT: Final = 8586
 UDP_SEARCH_PORT: Final = 8585           # 本地搜索（广播）端口
-DEFAULT_POLL_INTERVAL: Final = 10      # 秒，属性轮询周期
-MIN_POLL_INTERVAL: Final = 3
+DEFAULT_POLL_INTERVAL: Final = 0       # 秒；0 = 不做周期轮询，状态由网关主动上报
+MIN_POLL_INTERVAL: Final = 0
 MAX_POLL_INTERVAL: Final = 120
 
 # ------------------------------------------------------------------ LINK 主题

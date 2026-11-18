@@ -50,9 +50,9 @@
     "step": {
       "init": {
         "title": "HDL LINK 选项",
-        "description": "网关 {host}：可调整状态轮询周期，或设置本地加密密钥以启用实时上报。",
+        "description": "网关 {host}：设备状态变化由网关主动上报，无需周期轮询。如需在特殊环境下兜底，可填写轮询间隔（秒）；0 表示关闭。",
         "data": {
-          "poll_interval": "轮询周期",
+          "poll_interval": "兜底轮询间隔（秒，0 = 关闭）",
           "local_secret": "本地加密密钥（16 位，可留空）"
         }
       }
