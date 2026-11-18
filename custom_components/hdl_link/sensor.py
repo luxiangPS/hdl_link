@@ -8,7 +8,12 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfIlluminance, UnitOfTemperature
+from homeassistant.const import UnitOfTemperature
+
+try:  # HA 新旧版本兼容：照度单位常量所在模块有变化
+    from homeassistant.const import UnitOfIlluminance  # type: ignore[attr-defined]
+except ImportError:  # pragma: no cover
+    UnitOfIlluminance = None  # type: ignore[assignment]
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -29,7 +34,7 @@ SENSOR_FIELDS = (
         "key": "illuminance",
         "name": "照度",
         "device_class": SensorDeviceClass.ILLUMINANCE,
-        "unit": UnitOfIlluminance.LUX,
+        "unit": UnitOfIlluminance.LUX if UnitOfIlluminance else "lx",
         "state_class": SensorStateClass.MEASUREMENT,
         "digits": 0,
     },
