@@ -96,26 +96,28 @@ class HdlLinkConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             manual_value = str(user_input.get("manual_host") or "").strip()
             host = ""
-            if manual_value:
+            picked = str(user_input.get("gateway") or "")
+            if picked and picked != MANUAL_HOST:
+                # 下拉里明确选了一台发现的网关，优先用它
+                host = picked
+            elif manual_value:
                 hosts, is_range = expand_hosts(manual_value)
                 if not hosts:
                     errors["base"] = "invalid_host"
                 elif is_range:
                     found = await async_scan(hosts, timeout=30)
                     if found:
-                        host = found[0].host
                         self._found = found
+                        if len(found) == 1:
+                            host = found[0].host
+                        # 命中多台时先不连，回到表单把结果列进下拉，由用户挑一台
                     else:
                         errors["base"] = "cannot_connect"
                         self._async_report_scan(hosts, LAST_SCAN)
                 else:
                     host = hosts[0]
             else:
-                picked = str(user_input.get("gateway") or "")
-                if not picked or picked == MANUAL_HOST:
-                    errors["base"] = "need_host"
-                else:
-                    host = picked
+                errors["base"] = "need_host"
 
             if not errors and host:
                 try:
@@ -151,7 +153,10 @@ class HdlLinkConfigFlow(ConfigFlow, domain=DOMAIN):
                 ): selector.SelectSelector(
                     selector.SelectSelectorConfig(options=options, mode=selector.SelectSelectorMode.DROPDOWN)
                 ),
-                vol.Optional("manual_host", default=manual_value): selector.TextSelector(
+                vol.Optional(
+                    "manual_host",
+                    default="" if len(found) > 1 else manual_value,
+                ): selector.TextSelector(
                     selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
                 ),
             }
