@@ -245,7 +245,7 @@ async def async_scan(
         hosts = list(dict.fromkeys(extra_hosts))
         loop = asyncio.get_running_loop()
         try:
-            found = await loop.run_in_executor(None, udp_unicast_search, hosts, min(timeout, 6.0))
+            found = await loop.run_in_executor(None, udp_unicast_search, hosts, min(timeout, 3.0))
         except Exception as err:  # noqa: BLE001
             LOGGER.debug("UDP 单播搜索异常: %s", err)
             found = []
@@ -269,7 +269,7 @@ async def async_scan(
         return []
     # 广播被 NAT/路由器挡住时，先对本机网段做 UDP 单播，比 TCP 扫描快得多
     try:
-        found = await loop.run_in_executor(None, udp_unicast_search, sorted(hosts), min(timeout, 6.0))
+        found = await loop.run_in_executor(None, udp_unicast_search, sorted(hosts), min(timeout, 3.0))
     except Exception as err:  # noqa: BLE001
         LOGGER.debug("UDP 网段单播异常: %s", err)
         found = []

@@ -117,9 +117,11 @@ class LinkClient:
     async def async_connect(self) -> None:
         if self.connected:
             return
+        # 连接超时跟随实例超时（网段探测时就要短，正常连接才用宽裕的上限）
+        connect_timeout = min(self.timeout, 12.0)
         try:
             self._reader, self._writer = await asyncio.wait_for(
-                asyncio.open_connection(self.host, self.port), timeout=12
+                asyncio.open_connection(self.host, self.port), timeout=connect_timeout
             )
         except (OSError, asyncio.TimeoutError) as err:
             raise LinkError(f"连接 {self.host}:{self.port} 失败: {err}") from err
