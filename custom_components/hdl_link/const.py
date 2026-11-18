@@ -129,5 +129,5 @@ LIGHT_DIMMING_SPKS: Final = ("light.dimming", "light.cct", "light.rgb", "light.r
 ON_VALUES: Final = ("on", "true", "1", "open", "active")
 READ_BATCH: Final = 40        # 单次 property/read 携带的 sid 上限
 CONNECT_TIMEOUT: Final = 12
-SCAN_CONCURRENCY: Final = 60  # 网段扫描并发
-SCAN_TIMEOUT: Final = 0.9
+SCAN_CONCURRENCY: Final = 32  # 网段扫描并发
+SCAN_TIMEOUT: Final = 2.5     # 单机探测超时（跨 NAT / 跨网段时需要更宽裕）

@@ -100,7 +100,7 @@ class HdlLinkConfigFlow(ConfigFlow, domain=DOMAIN):
                 if not hosts:
                     errors["base"] = "invalid_host"
                 elif is_range:
-                    found = await async_scan(hosts, timeout=20)
+                    found = await async_scan(hosts, timeout=30)
                     if found:
                         host = found[0].host
                         self._found = found
