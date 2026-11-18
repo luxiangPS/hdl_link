@@ -56,7 +56,8 @@ class HdlSensor(HdlEntity, SensorEntity):
         key, device_class, unit = SENSOR_KEYS[spk]
         self._key = key
         raw = str(config.get("name") or "").strip()
-        if raw:
+        dev_name = str((coordinator.devices.get(self.oid, {}) or {}).get("device_name") or "").strip()
+        if raw and raw != dev_name:
             self._attr_name = f"{self.func_name} {key}" if unit is None else self.func_name
         else:
             self._attr_name = TYPE_LABEL.get(device_class, self.func_name)

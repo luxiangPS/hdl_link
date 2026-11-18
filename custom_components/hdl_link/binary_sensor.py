@@ -56,10 +56,13 @@ class HdlBinarySensor(HdlEntity, BinarySensorEntity):
         spk = str(config.get("spk"))
         key, device_class = BINARY_SENSOR_KEYS[spk]
         self._key = key
-        # 工程里没起名时用类型名（人体感应 / 门磁 …），避免和设备名重复
-        self._attr_name = (
-            str(config.get("name") or "").strip() or TYPE_LABEL.get(device_class, self.func_name)
-        )
+        # 工程里没起名、或名字与设备名重复时用类型名（人体感应 / 门磁 …）
+        raw = str(config.get("name") or "").strip()
+        dev_name = str((coordinator.devices.get(self.oid, {}) or {}).get("device_name") or "").strip()
+        if raw and raw != dev_name:
+            self._attr_name = raw
+        else:
+            self._attr_name = TYPE_LABEL.get(device_class, self.func_name)
         if device_class in DEVICE_CLASS_MAP:
             self._attr_device_class = DEVICE_CLASS_MAP[device_class]
 
