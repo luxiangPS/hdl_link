@@ -97,13 +97,13 @@ def _to_info(obj: dict) -> GatewayInfo | None:
     )
 
 
-def udp_search(timeout: float = 3.0, port: int = UDP_SEARCH_PORT) -> list[GatewayInfo]:
-    """向局域网广播搜索请求并收集应答（同步实现，供 executor 调用）。"""
+def _collect(sock_targets: list[str], timeout: float, port: int, rounds: int = 2) -> list[GatewayInfo]:
+    """向给定地址逐个发送搜索帧并收集应答（同步实现，供 executor 调用）。"""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
-        # 网关把应答发回搜索源端口，因此必须先占住搜索端口
+        # 网关把应答发回搜索端口，因此必须先占住该端口
         sock.bind(("", port))
     except OSError as err:
         LOGGER.debug("无法绑定 UDP %s（%s），改用临时端口", port, err)
@@ -114,14 +114,13 @@ def udp_search(timeout: float = 3.0, port: int = UDP_SEARCH_PORT) -> list[Gatewa
             return []
 
     frame = _search_frame()
-    targets = _broadcast_targets()
-    for _ in range(2):
-        for target in targets:
+    for _ in range(rounds):
+        for target in sock_targets:
             try:
                 sock.sendto(frame, (target, port))
             except OSError as err:
-                LOGGER.debug("广播 %s:%s 失败: %s", target, port, err)
-        time.sleep(0.15)
+                LOGGER.debug("发送 %s:%s 失败: %s", target, port, err)
+        time.sleep(0.12)
 
     sock.settimeout(0.35)
     found: list[GatewayInfo] = []
@@ -147,7 +146,28 @@ def udp_search(timeout: float = 3.0, port: int = UDP_SEARCH_PORT) -> list[Gatewa
             if all(info.oid != x.oid for x in found):
                 found.append(info)
     sock.close()
-    LOGGER.debug("广播搜索到 %d 台网关（目标 %s）", len(found), targets)
+    return found
+
+
+def udp_search(timeout: float = 3.0, port: int = UDP_SEARCH_PORT) -> list[GatewayInfo]:
+    """向局域网广播搜索请求并收集应答（同步实现，供 executor 调用）。"""
+    found = _collect(_broadcast_targets(), timeout, port, rounds=2)
+    LOGGER.debug("广播搜索到 %d 台网关", len(found))
+    return found
+
+
+def udp_unicast_search(
+    hosts: list[str], timeout: float = 3.0, port: int = UDP_SEARCH_PORT
+) -> list[GatewayInfo]:
+    """逐个地址单播搜索。
+
+    广播穿不过虚拟化 NAT（HA 在 NAT 网段时广播只在 NAT 内部打转），
+    但单播 UDP 可以经 NAT 出站并把应答收回来，因此在跨网段部署时用它兜底。
+    """
+    if not hosts:
+        return []
+    found = _collect(hosts, timeout, port, rounds=2)
+    LOGGER.debug("单播搜索 %d 个地址，命中 %d 台网关", len(hosts), len(found))
     return found
 
 
@@ -212,7 +232,16 @@ async def async_scan(
     · 指定了地址（手动输入/校验）时：只对这些地址做 TCP 单播探测。
     """
     if extra_hosts:
-        return await _tcp_scan(list(dict.fromkeys(extra_hosts)), timeout, port)
+        hosts = list(dict.fromkeys(extra_hosts))
+        loop = asyncio.get_running_loop()
+        try:
+            found = await loop.run_in_executor(None, udp_unicast_search, hosts, min(timeout, 6.0))
+        except Exception as err:  # noqa: BLE001
+            LOGGER.debug("UDP 单播搜索异常: %s", err)
+            found = []
+        if found:
+            return found
+        return await _tcp_scan(hosts, timeout, port)
 
     loop = asyncio.get_running_loop()
     try:
@@ -228,5 +257,14 @@ async def async_scan(
         hosts.update(str(h) for h in list(net.network.hosts())[:254])
     if not hosts:
         return []
-    LOGGER.debug("广播无应答，回退 TCP 扫描 %d 个地址", len(hosts))
+    # 广播被 NAT/路由器挡住时，先对本机网段做 UDP 单播，比 TCP 扫描快得多
+    try:
+        found = await loop.run_in_executor(None, udp_unicast_search, sorted(hosts), min(timeout, 6.0))
+    except Exception as err:  # noqa: BLE001
+        LOGGER.debug("UDP 网段单播异常: %s", err)
+        found = []
+    if found:
+        return found
+
+    LOGGER.debug("广播与单播均无应答，回退 TCP 扫描 %d 个地址", len(hosts))
     return await _tcp_scan(sorted(hosts), timeout, port)
