@@ -7,6 +7,7 @@ from typing import Any
 
 import voluptuous as vol
 
+from homeassistant.components import persistent_notification
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.core import callback
 from homeassistant.helpers import selector
@@ -30,7 +31,7 @@ from .const import (
     SPK_PLATFORM,
     SPK_PREFIX_PLATFORM,
 )
-from .discovery import async_scan, expand_hosts
+from .discovery import LAST_SCAN, async_scan, expand_hosts
 from .gateway import FunctionInfo, HdlGateway, GatewayInfo
 from .protocol import LinkError
 
@@ -106,6 +107,7 @@ class HdlLinkConfigFlow(ConfigFlow, domain=DOMAIN):
                         self._found = found
                     else:
                         errors["base"] = "cannot_connect"
+                        self._async_report_scan(hosts, LAST_SCAN)
                 else:
                     host = hosts[0]
             else:
@@ -184,6 +186,26 @@ class HdlLinkConfigFlow(ConfigFlow, domain=DOMAIN):
         )
 
     # ---------------------------------------------------------------- 第 2 步
+    @callback
+    def _async_report_scan(self, hosts: list[str], diag: dict) -> None:
+        """扫描失败时把诊断信息发到通知栏，便于现场判断是网络还是扫描问题。"""
+        try:
+            self.hass.async_create_task(
+                persistent_notification.async_create(
+                    self.hass,
+                    "目标地址 {} 个\nUDP 本地搜索：命中 {}，参数 {}\nTCP 探测：{}".format(
+                        len(hosts),
+                        diag.get("udp", 0),
+                        diag.get("udp_last", {}),
+                        diag.get("tcp", {}),
+                    ),
+                    title="HDL LINK 扫描诊断",
+                    notification_id="hdl_link_scan_diag",
+                )
+            )
+        except Exception:  # noqa: BLE001 - 诊断失败不影响主流程
+            LOGGER.debug("写入扫描诊断通知失败", exc_info=True)
+
     async def async_step_entities(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """勾选要接入的功能（来自网关内 function/list/get 的清单）。"""
         assert self._info is not None

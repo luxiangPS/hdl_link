@@ -22,6 +22,9 @@ LOGGER = logging.getLogger(__name__)
 _FRAME = re.compile(rb"Topic:(.*?)\r\nLength:\s*(\d+)\r\n\r\n")
 _BROADCASTS = ("255.255.255.255",)
 
+# 最近一次扫描的诊断信息（供配置向导展示，便于现场排查网络问题）
+LAST_SCAN: dict = {}
+
 
 def local_ipv4_networks() -> list[ipaddress.IPv4Interface]:
     """枚举本机所有可用的 IPv4 网段（不做 DNS、不联网）。"""
@@ -102,6 +105,7 @@ def _collect(sock_targets: list[str], timeout: float, port: int, rounds: int = 2
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    bound = port
     try:
         # 网关把应答发回搜索端口，因此必须先占住该端口
         sock.bind(("", port))
@@ -109,9 +113,12 @@ def _collect(sock_targets: list[str], timeout: float, port: int, rounds: int = 2
         LOGGER.debug("无法绑定 UDP %s（%s），改用临时端口", port, err)
         try:
             sock.bind(("", 0))
+            bound = sock.getsockname()[1]
         except OSError:
             sock.close()
+            LAST_SCAN["udp_bind_error"] = str(err)
             return []
+    LAST_SCAN["udp_last"] = {"targets": len(sock_targets), "port": port, "bound": bound}
 
     frame = _search_frame()
     for _ in range(rounds):
@@ -146,6 +153,8 @@ def _collect(sock_targets: list[str], timeout: float, port: int, rounds: int = 2
             if all(info.oid != x.oid for x in found):
                 found.append(info)
     sock.close()
+    LAST_SCAN.setdefault("udp", 0)
+    LAST_SCAN["udp"] = LAST_SCAN["udp"] + len(found)
     return found
 
 
@@ -192,6 +201,7 @@ async def _tcp_scan(hosts: list[str], timeout: float, port: int) -> list[Gateway
     _, pending = await asyncio.wait(tasks, timeout=timeout)
     for task in pending:
         task.cancel()
+    LAST_SCAN["tcp"] = {"targets": len(hosts), "hits": len(results), "cancelled": len(pending)}
     return results
 
 
