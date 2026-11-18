@@ -15,7 +15,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Final
 
-from .const import SCAN_DEVICE_RANGE, SCAN_WINDOW
+from .const import SCAN_DEVICE_RANGE, SCAN_PACKET_GAP, SCAN_WINDOW
 from .gateway import HdlGateway
 from .protocol import (
     CMD_CHANNELS_STATE,
@@ -73,8 +73,13 @@ async def async_scan(
     first: int = 1,
     last: int = SCAN_DEVICE_RANGE,
     window: float = SCAN_WINDOW,
+    gap: float = SCAN_PACKET_GAP,
 ) -> dict[int, DiscoveredDevice]:
-    """扫描 subnet.first..last，返回 {device_id: DiscoveredDevice}。"""
+    """扫描 subnet.first..last，返回 {device_id: DiscoveredDevice}。
+
+    发包必须节流：真机实测网关在 >50 包/秒的突发下会大量丢包（500 包瞬间打完只得
+    0~1 个应答），按 SCAN_PACKET_GAP（默认 20ms）逐包发送后应答正常。
+    """
     found: dict[int, DiscoveredDevice] = {}
 
     def on_frame(frame: HdlFrame) -> None:
@@ -97,6 +102,8 @@ async def async_scan(
         for device in range(first, last + 1):
             for code in PROBE_CODES:
                 await gateway.async_send(code, (subnet, device), b"\x01")
+                if gap:
+                    await asyncio.sleep(gap)
         await asyncio.sleep(window)
     finally:
         unsubscribe()
