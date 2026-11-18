@@ -1,0 +1,57 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "连接 HDL 网关",
+        "description": "填写网关 IP。集成会用 UDP 6000 端口扫描总线，请先关闭 HDL Buspro Setup Tool 等占用 6000 的软件。",
+        "data": {
+          "host": "网关 IP",
+          "port": "UDP 端口",
+          "subnet": "总线子网号"
+        },
+        "data_description": {
+          "port": "默认 6000，与网关面板配置一致",
+          "subnet": "扫描哪个子网下的设备，常见为 1 或 10"
+        }
+      },
+      "devices": {
+        "title": "选择要接入的设备",
+        "description": "扫描到 {count} 台设备，勾选需要接入 HA 的。",
+        "data": {
+          "devices": "设备"
+        }
+      },
+      "mapping": {
+        "title": "分配通道用途",
+        "description": "可选。格式：设备地址/通道号，多个用逗号分隔，例如 10.100/9, 10.100/10。未填写的通道默认作为开关。提示示例：{relay_hint}",
+        "data": {
+          "dimmers": "调光通道（作为 light）",
+          "covers": "窗帘通道（作为 cover）",
+          "doorbells": "门铃设备地址（作为 binary_sensor）"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "网关无响应，请检查 IP、端口与网络。",
+      "no_devices": "扫描未发现设备，请确认子网号与总线连接。",
+      "port_in_use": "本机 UDP 6000 被占用，请先关闭 HDL 调试工具或旧桥接进程。",
+      "unknown": "未知错误，请查看日志。"
+    },
+    "abort": {
+      "already_configured": "该网关已配置。"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "通道用途",
+        "description": "修改后保存，集成会自动重载。",
+        "data": {
+          "dimmers": "调光通道（作为 light）",
+          "covers": "窗帘通道（作为 cover）",
+          "doorbells": "门铃设备地址（作为 binary_sensor）"
+        }
+      }
+    }
+  }
+}
