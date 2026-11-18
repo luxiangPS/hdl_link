@@ -1,70 +1,88 @@
-"""实体基类：统一设备信息、地址解析与更新订阅。"""
+"""实体基类：按网关节点的物理模块分组，状态取自协调器缓存。"""
 
 from __future__ import annotations
 
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import callback
+from typing import Any
+
 from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
-from homeassistant.helpers.entity import Entity
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import CONF_DEVICE_TYPE_NUM, DOMAIN, MANUFACTURER, SIGNAL_UPDATE
-from .protocol import DEV_TYPE_NAMES
-
-
-def device_type_of(cfg, address_text: str) -> int:
-    """从配置里取该设备的 HDL 类型号，取不到返回 0。"""
-    return int((cfg.get(CONF_DEVICE_TYPE_NUM) or {}).get(str(address_text), 0))
+from .const import DOMAIN, MANUFACTURER, ON_VALUES
+from .coordinator import HdlCoordinator
 
 
-def parse_address(text: str) -> tuple[int, int]:
-    """'10.100' -> (10, 100)。"""
-    radio, device = text.split(".")
-    return int(radio), int(device)
-
-
-class HdlEntity(Entity):
+class HdlEntity(CoordinatorEntity[HdlCoordinator]):
     """所有 HDL 实体的公共部分。"""
 
     _attr_has_entity_name = True
-    _attr_should_poll = False
 
-    def __init__(
-        self,
-        runtime,
-        entry: ConfigEntry,
-        address: tuple[int, int],
-        device_type: int,
-        *,
-        key: str,
-    ) -> None:
-        self.runtime = runtime
-        self.entry = entry
-        self.address = address
-        self._device_type = device_type
-        self._attr_unique_id = f"{entry.entry_id}-{address[0]}.{address[1]}-{key}"
+    def __init__(self, coordinator: HdlCoordinator, config: dict[str, Any], key: str) -> None:
+        super().__init__(coordinator)
+        self.sid: str = str(config["sid"])
+        self.spk: str = str(config.get("spk") or "")
+        self.oid: str = str(config.get("oid") or "")
+        self.func_name: str = str(config.get("name") or self.sid)
+        self._attr_unique_id = f"{coordinator.gw_id}-{self.sid}-{key}"
+        self._attr_name = None  # 用设备名 + 实体名组合
 
+    # ------------------------------------------------------------------ 设备
     @property
     def device_info(self) -> DeviceInfo:
-        address_text = f"{self.address[0]}.{self.address[1]}"
-        device_type = self._device_type
+        dev = self.coordinator.devices.get(self.oid, {})
+        model = dev.get("device_model") or self.coordinator.entities.get(self.sid, {}).get("omodel") or "HDL 功能模块"
+        name = dev.get("device_name") or model
         return DeviceInfo(
-            identifiers={(DOMAIN, f"{self.entry.entry_id}-{address_text}")},
+            identifiers={(DOMAIN, f"{self.coordinator.gw_id}-{self.oid or self.sid}")},
             manufacturer=MANUFACTURER,
-            model=DEV_TYPE_NAMES.get(device_type, f"HDL 总线设备 {device_type}"),
-            name=f"HDL {address_text}",
-            suggested_area=None,
+            model=str(model),
+            name=str(name),
+            sw_version=str(dev.get("fw_version") or "") or None,
+            via_device=(DOMAIN, self.coordinator.gw_id),
         )
 
-    async def async_added_to_hass(self) -> None:
-        self.async_on_remove(
-            async_dispatcher_connect(
-                self.hass,
-                f"{SIGNAL_UPDATE}_{self.address[0]}.{self.address[1]}",
-                self._handle_update,
-            )
+    @property
+    def gateway_info(self) -> DeviceInfo:
+        return DeviceInfo(
+            identifiers={(DOMAIN, self.coordinator.gw_id)},
+            manufacturer=MANUFACTURER,
+            model="HDL 主网关（LINK）",
+            name=self.coordinator.gw_name,
+            configuration_url=f"http://{self.coordinator.gateway.host}",
         )
 
-    @callback
-    def _handle_update(self, frame=None) -> None:
-        self.async_write_ha_state()
+    # ------------------------------------------------------------------ 状态
+    @property
+    def values(self) -> dict[str, str]:
+        return (self.coordinator.data or {}).get(self.sid) or {}
+
+    @property
+    def online(self) -> bool:
+        return True
+
+    def value(self, *keys: str) -> str | None:
+        for key in keys:
+            if key in self.values:
+                return self.values[key]
+        return None
+
+    def is_on(self, *keys: str) -> bool | None:
+        raw = self.value(*(keys or ("on_off",)))
+        if raw is None:
+            return None
+        return str(raw).strip().lower() in ON_VALUES
+
+    # ------------------------------------------------------------------ 写属性
+    async def async_write(self, **attrs: str) -> None:
+        status = [{"key": k, "value": str(v)} for k, v in attrs.items() if v is not None]
+        if not status:
+            return
+        await self.coordinator.async_write(self.sid, status)
+
+
+def numeric(raw: str | None) -> float | None:
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None

@@ -1,81 +1,65 @@
-"""传感器实体：温度 / 照度（来自 0x1605 应答与 0x1630 上报）。"""
+"""数值传感器实体：温度 / 湿度 / 照度 / CO2 / PM2.5 / TVOC。"""
 
 from __future__ import annotations
 
-from homeassistant.components.sensor import (
-    SensorDeviceClass,
-    SensorEntity,
-    SensorStateClass,
-)
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfTemperature
+from typing import Any
 
-try:  # HA 新旧版本兼容：照度单位常量所在模块有变化
-    from homeassistant.const import UnitOfIlluminance  # type: ignore[attr-defined]
-except ImportError:  # pragma: no cover
-    UnitOfIlluminance = None  # type: ignore[assignment]
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import PERCENTAGE
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .config_data import merged_config
-from .const import CONF_DEVICES, CONF_DEVICE_TYPES, DEVICE_KIND_SENSOR, DOMAIN
-from .entity import HdlEntity, device_type_of, parse_address
+from .const import DOMAIN, SENSOR_KEYS
+from .coordinator import HdlCoordinator
+from .entity import HdlEntity, numeric
 
-SENSOR_FIELDS = (
-    {
-        "key": "temperature",
-        "name": "温度",
-        "device_class": SensorDeviceClass.TEMPERATURE,
-        "unit": UnitOfTemperature.CELSIUS,
-        "state_class": SensorStateClass.MEASUREMENT,
-        "digits": 1,
-    },
-    {
-        "key": "illuminance",
-        "name": "照度",
-        "device_class": SensorDeviceClass.ILLUMINANCE,
-        "unit": UnitOfIlluminance.LUX if UnitOfIlluminance else "lx",
-        "state_class": SensorStateClass.MEASUREMENT,
-        "digits": 0,
-    },
-)
+PARALLEL_UPDATES = 0
+
+# 单位用普通字符串，避免不同 HA 版本常量位置变化导致导入失败
+DEVICE_CLASS_MAP = {
+    "temperature": SensorDeviceClass.TEMPERATURE,
+    "humidity": SensorDeviceClass.HUMIDITY,
+    "illuminance": SensorDeviceClass.ILLUMINANCE,
+    "carbon_dioxide": SensorDeviceClass.CO2,
+}
 
 
 async def async_setup_entry(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
+    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
-    runtime = hass.data[DOMAIN][entry.entry_id]
-    cfg = merged_config(entry)
-    kinds = cfg.get(CONF_DEVICE_TYPES, {})
-    entities: list[HdlSensor] = []
-    for address_text in cfg.get(CONF_DEVICES, []):
-        if kinds.get(str(address_text)) != DEVICE_KIND_SENSOR:
-            continue
-        address = parse_address(str(address_text))
-        for field in SENSOR_FIELDS:
-            entities.append(HdlSensor(runtime, entry, address, field, device_type_of(cfg, address_text)))
+    coordinator: HdlCoordinator = hass.data[DOMAIN][entry.entry_id]
+    entities = [
+        HdlSensor(coordinator, config)
+        for config in coordinator.entities.values()
+        if config.get("platform") == "sensor" and str(config.get("spk")) in SENSOR_KEYS
+    ]
     async_add_entities(entities)
 
 
-class HdlSensor(HdlEntity):
-    """单个测量值。"""
+class HdlSensor(HdlEntity, SensorEntity):
+    """HDL 数值传感器。"""
 
     _attr_has_entity_name = True
+    _attr_state_class = SensorStateClass.MEASUREMENT
 
-    def __init__(self, runtime, entry, address, field: dict, device_type: int = 0) -> None:
-        super().__init__(runtime, entry, address, device_type, key=field["key"])
-        self._field = field
-        self._attr_name = field["name"]
-        self._attr_device_class = field["device_class"]
-        self._attr_native_unit_of_measurement = field["unit"]
-        self._attr_state_class = field["state_class"]
-        self._attr_suggested_display_precision = field["digits"]
+    def __init__(self, coordinator: HdlCoordinator, config: dict[str, Any]) -> None:
+        super().__init__(coordinator, config, "sensor")
+        spk = str(config.get("spk"))
+        key, device_class, unit = SENSOR_KEYS[spk]
+        self._key = key
+        self._attr_name = f"{self.func_name} {key}" if unit is None else self.func_name
+        if device_class in DEVICE_CLASS_MAP:
+            self._attr_device_class = DEVICE_CLASS_MAP[device_class]
+        if unit:
+            self._attr_native_unit_of_measurement = unit
+        # 湿度与照度用 0 位小数，温度与 CO2 保留精度
+        self._attr_suggested_display_precision = 1 if spk == "sensor.temperature" else 0
 
     @property
     def native_value(self) -> float | None:
-        value = self.runtime.sensor_value(self.address, self._field["key"])
-        if value is None:
-            return None
-        return round(value, self._field["digits"])
+        return numeric(self.value(self._key))
+
+    @property
+    def available(self) -> bool:
+        return super().available and self.native_value is not None

@@ -2,66 +2,50 @@
   "config": {
     "step": {
       "user": {
-        "title": "发现 HDL LINK 网关",
-        "description": "已自动发现 {count} 个应答的网关（UDP 6000 广播 + 本网段扫描）。请选择要接入的网关；不在列表里可选「手动输入网关 IP」。若提示端口被占用，请先关闭 HDL LINK Setup Tool 等同占用 6000 端口的软件。",
+        "title": "选择 HDL 网关",
+        "description": "已在当前网络中发现 {count} 台 HDL 网关（LINK 协议，TCP 8586）。选择要接入的网关；若未发现，请选「手动输入网关 IP」。",
         "data": {
-          "host": "网关",
-          "port": "UDP 端口"
-        },
-        "data_description": {
-          "port": "默认 6000，与网关面板配置一致"
+          "gateway": "网关"
         }
       },
       "manual": {
-        "title": "手动指定网关",
-        "description": "广播被防火墙拦截或网关在其它网段时使用。子网号无需填写，集成会自动尝试常见子网。",
+        "title": "手动输入网关 IP",
+        "description": "输入 HDL 主网关（MGWIP/LINK 网关）的局域网 IP。集成会用 LINK 协议读取网关内部的设备功能与场景清单，不需要填写总线子网号。",
         "data": {
-          "host": "网关 IP",
-          "port": "UDP 端口"
+          "host": "网关 IP"
         }
       },
-      "devices": {
-        "title": "选择要接入的设备",
-        "description": "网关 {host}（自动判定子网 {subnet}）共扫描到 {count} 台设备。已读取的功能属性：{summary}。勾选要接入 HA 的设备，通道会自动展开成开关/调光实体。",
+      "entities": {
+        "title": "选择要接入的功能",
+        "description": "网关 {host}（{oid}）共 {total} 个功能，其中 {supported} 个可直接接入，{unsupported} 个类型暂不支持。列表来自网关内的功能清单，而不是扫描到的设备。",
         "data": {
-          "devices": "设备"
+          "entities": "功能"
         }
       },
-      "mapping": {
-        "title": "分配功能与场景",
-        "description": "通道概况：{channel_hint}。\n读到场景：{scene_hint}。\n格式均为逗号分隔：调光 10.100/9，窗帘 10.100/23，门铃 10.3，场景 1,3,5。未填写的通道默认作为开关。",
+      "scenes": {
+        "title": "选择场景",
+        "description": "网关内共发现 {count} 个场景，勾选后会生成对应的场景按钮。可留空。",
         "data": {
-          "dimmers": "调光通道（作为 light）",
-          "covers": "窗帘通道（作为 cover）",
-          "doorbells": "门铃设备地址（作为 binary_sensor）",
-          "scenes": "场景号（作为 button）"
-        },
-        "data_description": {
-          "scenes": "HDL LINK 场景号 1-128，按下按钮即发送场景唤醒"
+          "scenes": "场景"
         }
       }
     },
     "error": {
-      "cannot_connect": "网关无响应，请检查 IP、端口与网络。",
-      "no_devices": "扫描未发现设备，请确认网关与总线连接。",
-      "no_gateway": "广播未发现网关：可直接在列表里选「手动输入网关 IP」，或检查 6000 端口是否被占用。",
-      "port_in_use": "本机 UDP 6000 被占用，请先关闭 HDL 调试工具或旧桥接进程。",
-      "unknown": "未知错误，请查看日志。"
+      "cannot_connect": "无法连接该网关：请确认 IP、网络互通，且 8586 端口可达。",
+      "no_functions": "已连上网关，但网关内没有读到任何功能。请确认网关工程已配置设备功能。",
+      "no_selection": "请至少勾选一个功能。"
     },
     "abort": {
-      "already_configured": "该网关已配置。"
+      "already_configured": "该网关已经完成接入。"
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "功能与场景",
-        "description": "修改后保存，集成会自动重载。",
+        "title": "HDL LINK 选项",
+        "description": "网关 {host}：可调整状态轮询周期。",
         "data": {
-          "dimmers": "调光通道（作为 light）",
-          "covers": "窗帘通道（作为 cover）",
-          "doorbells": "门铃设备地址（作为 binary_sensor）",
-          "scenes": "场景号（作为 button）"
+          "poll_interval": "轮询周期"
         }
       }
     }

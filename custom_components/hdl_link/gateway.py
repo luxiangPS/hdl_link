@@ -1,236 +1,227 @@
-"""HDL 网关 UDP 客户端（纯 asyncio，不依赖 Home Assistant，方便单测/压测）。"""
+"""HDL 网关的 LINK 协议封装：发现、读工程、读写属性、执行场景。"""
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import socket
-from collections.abc import Awaitable, Callable
-from typing import Any, Final
+from dataclasses import dataclass, field
+from typing import Any
 
-from .protocol import (
-    CMD_CHANNEL_CONTROL,
-    CMD_CHANNELS_STATE,
-    CMD_READ_CHANNELS,
-    CMD_READ_SENSOR,
-    CMD_SENSOR_REPORT,
-    CMD_SENSOR_STATE,
-    HdlFrame,
-    HdlFrameError,
-    build_channel_control,
-    build_frame,
-    parse_channel_states,
-    parse_frame,
-    parse_sensor_payload,
+from .const import (
+    READ_BATCH,
+    TOPIC_DEVICE_LIST,
+    TOPIC_FUNCTION_ATTR,
+    TOPIC_FUNCTION_LIST,
+    TOPIC_GATEWAY_GET,
+    TOPIC_GATEWAY_SEARCH,
+    TOPIC_HEARTBEAT,
+    TOPIC_PROPERTY_DOWN,
+    TOPIC_PROPERTY_READ,
+    TOPIC_ROOM_LIST,
+    TOPIC_SCENE_EXECUTE,
+    TOPIC_SCENE_LIST,
 )
+from .protocol import LinkClient, LinkError
 
 LOGGER = logging.getLogger(__name__)
 
-REQUEST_TIMEOUT: Final = 1.5
-EventCallback = Callable[[HdlFrame], None]
 
-# 请求-应答配对：把请求命令映射到它可能的应答码
-RESPONSE_CODES: Final[dict[int, tuple[int, ...]]] = {
-    CMD_READ_CHANNELS: (CMD_CHANNELS_STATE,),
-    CMD_READ_SENSOR: (CMD_SENSOR_STATE,),
-}
+@dataclass(slots=True)
+class GatewayInfo:
+    """网关基本信息（gateway/search 与 gateway/get 的 objects）。"""
+
+    host: str
+    oid: str
+    name: str
+    model: str
+    mac: str
+    gateway_id: str = ""
+    raw: dict[str, Any] = field(default_factory=dict)
 
 
-class HdlGatewayError(Exception):
-    """网关通信错误。"""
+@dataclass(slots=True)
+class FunctionInfo:
+    """网关内的一个功能（一个可控/可读的最小单元）。"""
+
+    sid: str
+    oid: str
+    name: str
+    spk: str
+    omodel: str = ""
+    online: bool = True
+    attributes: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def attr_keys(self) -> list[str]:
+        return [str(a.get("key")) for a in self.attributes]
 
 
 class HdlGateway:
-    """一个 UDP 6000 网关连接。
+    """一个网关连接上的 LINK 操作集合（异步、非阻塞）。"""
 
-    一个进程/一条总线上只能有一个客户端占用（实测网关应答只回给绑定 6000 的那个 socket），
-    因此本类设计为「一个网关一个实例」。
-    """
-
-    def __init__(
-        self,
-        host: str,
-        port: int = 6000,
-        *,
-        source_ip: str | None = None,
-        bind_port: int | None = None,
-        timeout: float = REQUEST_TIMEOUT,
-    ) -> None:
+    def __init__(self, host: str, oid: str | None = None, port: int = 8586) -> None:
         self.host = host
-        self.port = port
-        # 真机实测：网关会把应答回给绑定 6000 的客户端，因此默认绑 6000；
-        # 仿真/测试时传 bind_port=0 由系统分配临时端口。
-        self.bind_port = port if bind_port is None else bind_port
-        self.timeout = timeout
-        self._source_ip = source_ip
-        self._transport: asyncio.DatagramTransport | None = None
-        self._protocol: _HdlProtocol | None = None
-        self._pending: dict[tuple[tuple[int, int], int], asyncio.Future[HdlFrame]] = {}
-        self._listeners: list[EventCallback] = []
-        # 状态缓存：{(subnet, device): {channel: level}}
-        self.channel_states: dict[tuple[int, int], dict[int, int]] = {}
-        self.sensor_states: dict[tuple[int, int], dict[str, float]] = {}
+        self.oid = oid or ""
+        self.client = LinkClient(host, port)
+        self.info: GatewayInfo | None = None
 
-    # ---------------- 生命周期 ----------------
-
-    @property
-    def started(self) -> bool:
-        return self._protocol is not None
-
-    async def async_start(self) -> None:
-        """绑定本地 UDP 端口并开始收包。"""
-        if self.started:
-            return
-        loop = asyncio.get_running_loop()
-        transport, protocol = await loop.create_datagram_endpoint(
-            _HdlProtocol,
-            local_addr=("0.0.0.0", self.bind_port),
-            allow_broadcast=True,
-        )
-        self._transport = transport
-        self._protocol = protocol
-        protocol.owner = self
-        socket_: socket.socket = transport.get_extra_info("socket")
+    # -------------------------------------------------------------- 发现
+    @staticmethod
+    async def async_search(host: str, port: int = 8586, timeout: float = 4.0) -> GatewayInfo | None:
+        """LINK 广播搜索：对指定主机发 /user/all/custom/gateway/search。"""
+        client = LinkClient(host, port, timeout=timeout)
         try:
-            socket_.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        except OSError:  # pragma: no cover - 平台差异
-            LOGGER.debug("无法开启广播选项，忽略")
-        LOGGER.debug("HDL 网关客户端已启动，本地端口 %s", self.port)
-
-    def close(self) -> None:
-        for future in self._pending.values():
-            if not future.done():
-                future.cancel()
-        self._pending.clear()
-        if self._transport is not None:
-            self._transport.close()
-        self._transport = None
-        self._protocol = None
-
-    # ---------------- 收发 ----------------
-
-    @property
-    def _my_ip(self) -> str:
-        if self._source_ip:
-            return self._source_ip
-        if self._transport is not None:
-            sockname = self._transport.get_extra_info("sockname")
-            if sockname:
-                local = sockname[0]
-                if local and local != "0.0.0.0":
-                    return local
-        return "127.0.0.1"
-
-    def _send_raw(self, code: int, target: tuple[int, int], payload: bytes = b"") -> None:
-        if self._transport is None:
-            raise HdlGatewayError("客户端尚未启动")
-        frame = build_frame(self._my_ip, code=code, target=target, payload=payload)
-        self._transport.sendto(frame, (self.host, self.port))
-
-    async def async_send(
-        self, code: int, target: tuple[int, int], payload: bytes = b""
-    ) -> None:
-        """只发不等应答（用于控制类命令）。"""
-        self._send_raw(code, target, payload)
-
-    async def async_request(
-        self,
-        code: int,
-        target: tuple[int, int],
-        payload: bytes = b"",
-    ) -> HdlFrame:
-        """发一条请求并等待对应应答；超时抛 HdlGatewayError。"""
-        expected = RESPONSE_CODES.get(code, (code | 0x1,))
-        loop = asyncio.get_running_loop()
-        key = (target, expected[0])
-        future: asyncio.Future[HdlFrame] = loop.create_future()
-        self._pending[key] = future
-        try:
-            self._send_raw(code, target, payload)
-            return await asyncio.wait_for(future, timeout=self.timeout)
-        except TimeoutError as err:
-            raise HdlGatewayError(
-                f"{target[0]}.{target[1]} 在 {self.timeout}s 内没有应答命令 0x{code:04X}"
-            ) from err
+            resp = await client.async_request(TOPIC_GATEWAY_SEARCH, timeout=timeout)
+        except LinkError:
+            return None
         finally:
-            self._pending.pop(key, None)
-
-    def _on_frame(self, frame: HdlFrame) -> None:
-        self._cache_frame(frame)
-
-        for (target, expected_code), future in list(self._pending.items()):
-            if frame.code == expected_code and (
-                frame.address == f"{target[0]}.{target[1]}" or frame.target == target
-            ):
-                if not future.done():
-                    future.set_result(frame)
-                return
-
-        for listener in self._listeners:
-            try:
-                listener(frame)
-            except Exception:  # noqa: BLE001 - 监听器异常不能拖垮接收循环
-                LOGGER.exception("HDL 事件监听器异常")
-
-    def _cache_frame(self, frame: HdlFrame) -> None:
-        addr = (frame.sender[0], frame.sender[1])
-        if frame.code == CMD_CHANNELS_STATE:
-            self.channel_states[addr] = parse_channel_states(frame.payload)
-        elif frame.code in (CMD_SENSOR_STATE, CMD_SENSOR_REPORT):
-            self.sensor_states[addr] = parse_sensor_payload(frame.payload)
-
-    # ---------------- 事件 ----------------
-
-    def add_listener(self, callback: EventCallback) -> Callable[[], None]:
-        self._listeners.append(callback)
-        return lambda: self._listeners.remove(callback)
-
-    # ---------------- 业务方法 ----------------
-
-    async def async_poll_channels(self, target: tuple[int, int]) -> dict[int, int] | None:
-        """读一个继电器设备全部通道状态；失败返回 None 并把错误写日志。"""
-        try:
-            frame = await self.async_request(CMD_READ_CHANNELS, target, b"\x01")
-        except HdlGatewayError as err:
-            LOGGER.warning("读取 %s.%s 通道状态失败: %s", *target, err)
+            await client.async_close()
+        if resp.get("code") not in ("0", "200", 0, 200):
             return None
-        return parse_channel_states(frame.payload)
-
-    async def async_set_channel(
-        self, target: tuple[int, int], channel: int, level: int, ramp_tenth_sec: int = 0
-    ) -> None:
-        """设置单个通道亮度（0=关，1..100=开/亮度）。"""
-        await self.async_send(
-            CMD_CHANNEL_CONTROL,
-            target,
-            build_channel_control(channel, level, ramp_tenth_sec),
+        obj = resp.get("objects") or {}
+        if isinstance(obj, list):
+            obj = obj[0] if obj else {}
+        if not obj:
+            return None
+        return GatewayInfo(
+            host=host,
+            oid=str(obj.get("oid", "")),
+            name=str(obj.get("device_name", obj.get("device_model", host))),
+            model=str(obj.get("device_model", "")),
+            mac=str(obj.get("device_mac", "")),
+            gateway_id=str(obj.get("gatewayId", "")),
+            raw=obj,
         )
-        # 本地乐观更新，等下一次轮询用总线真值覆盖
-        self.channel_states.setdefault(target, {})[channel] = max(0, min(100, level))
 
-    async def async_read_sensor(self, target: tuple[int, int]) -> dict[str, float] | None:
-        """读一个温湿照传感器的数值。"""
+    # -------------------------------------------------------------- 连接
+    async def async_connect(self) -> GatewayInfo:
+        await self.client.async_connect()
+        if self.info is None:
+            if not self.oid:
+                searched = await self.async_search(self.host)
+                if searched is None:
+                    raise LinkError(f"{self.host} 不是可用的 HDL LINK 网关")
+                self.info = searched
+                self.oid = searched.oid
+            else:
+                self.info = await self.async_search(self.host)
+                if self.info is None:
+                    # 搜索失败也允许继续，用配置里的 oid
+                    self.info = GatewayInfo(self.host, self.oid, self.oid, "", "")
+        if self.info and self.info.oid:
+            self.oid = self.info.oid
+        return self.info
+
+    async def async_close(self) -> None:
+        await self.client.async_close()
+
+    # -------------------------------------------------------------- 读工程
+    async def async_gateway_detail(self) -> dict[str, Any]:
+        topic = TOPIC_GATEWAY_GET.format(gw=self.oid)
+        resp = await self.client.async_request(topic, {"objects": {}})
+        return resp.get("objects") or {}
+
+    async def async_devices(self) -> list[dict[str, Any]]:
+        """物理模块列表（device/list/get）。"""
+        resp = await self.client.async_request(TOPIC_DEVICE_LIST.format(gw=self.oid))
+        objs = resp.get("objects") or []
+        return objs if isinstance(objs, list) else []
+
+    async def async_functions(self) -> list[FunctionInfo]:
+        """功能列表（function/list/get）：一次可能返回不全，重复取直到不再新增。"""
+        collected: dict[str, FunctionInfo] = {}
+        for _ in range(10):
+            resp = await self.client.async_request(
+                TOPIC_FUNCTION_LIST.format(gw=self.oid), timeout=15
+            )
+            objs = resp.get("objects") or []
+            if isinstance(objs, dict):
+                objs = objs.get("objects") or []
+            new = 0
+            for obj in objs if isinstance(objs, list) else []:
+                sid = str(obj.get("sid", ""))
+                if not sid or sid in collected:
+                    continue
+                collected[sid] = FunctionInfo(
+                    sid=sid,
+                    oid=str(obj.get("oid", "")),
+                    name=str(obj.get("name", sid)),
+                    spk=str(obj.get("spk", "")),
+                    omodel=str(obj.get("omodel", "")),
+                    online=str(obj.get("online", "true")).lower() != "false",
+                )
+                new += 1
+            if new == 0:
+                break
+        return list(collected.values())
+
+    async def async_function_attributes(self, sids: list[str]) -> list[dict[str, Any]]:
+        """读取功能属性定义（function/attribute/get）。"""
+        resp = await self.client.async_request(
+            TOPIC_FUNCTION_ATTR.format(gw=self.oid),
+            {"objects": [{"sid": sid} for sid in sids]},
+            timeout=15,
+        )
+        objs = resp.get("objects") or []
+        return objs if isinstance(objs, list) else []
+
+    async def async_rooms(self) -> list[dict[str, Any]]:
+        resp = await self.client.async_request(TOPIC_ROOM_LIST.format(gw=self.oid))
+        objs = resp.get("objects") or []
+        return objs if isinstance(objs, list) else []
+
+    async def async_scenes(self) -> list[dict[str, Any]]:
+        resp = await self.client.async_request(TOPIC_SCENE_LIST.format(gw=self.oid))
+        objs = resp.get("objects") or []
+        return [o for o in objs if isinstance(o, dict)] if isinstance(objs, list) else []
+
+    # -------------------------------------------------------------- 读写属性
+    async def async_read_properties(self, sids: list[str]) -> dict[str, dict[str, str]]:
+        """批量读属性：返回 {sid: {key: value}}。"""
+        result: dict[str, dict[str, str]] = {}
+        for start in range(0, len(sids), READ_BATCH):
+            batch = sids[start:start + READ_BATCH]
+            try:
+                resp = await self.client.async_request(
+                    TOPIC_PROPERTY_READ.format(gw=self.oid),
+                    {"objects": [{"sid": sid} for sid in batch]},
+                    timeout=12,
+                )
+            except LinkError as err:
+                LOGGER.warning("读取属性失败（%d 个 sid）: %s", len(batch), err)
+                raise
+            for obj in resp.get("objects") or []:
+                sid = str(obj.get("sid", ""))
+                if not sid:
+                    continue
+                values: dict[str, str] = {}
+                for item in obj.get("status") or []:
+                    if isinstance(item, dict) and item.get("key") is not None:
+                        values[str(item["key"])] = str(item.get("value"))
+                result[sid] = values
+        return result
+
+    async def async_set_property(self, sid: str, status: list[dict[str, str]]) -> bool:
+        """下发属性（控制报文），返回是否被网关确认。"""
+        resp = await self.client.async_request(
+            TOPIC_PROPERTY_DOWN.format(gw=self.oid),
+            {"objects": [{"sid": sid, "status": status}]},
+            timeout=8,
+        )
+        ok = resp.get("code") in ("0", "200", 0, 200)
+        if not ok:
+            LOGGER.warning("控制 %s 失败: %s", sid, resp)
+        return ok
+
+    async def async_execute_scene(self, scene_sid: str) -> bool:
+        resp = await self.client.async_request(
+            TOPIC_SCENE_EXECUTE.format(gw=self.oid),
+            {"objects": [{"sid": scene_sid}]},
+            timeout=8,
+        )
+        return resp.get("code") in ("0", "200", 0, 200)
+
+    async def async_heartbeat(self) -> None:
         try:
-            frame = await self.async_request(CMD_READ_SENSOR, target, b"\x01")
-        except HdlGatewayError as err:
-            LOGGER.warning("读取 %s.%s 传感器失败: %s", *target, err)
-            return None
-        return parse_sensor_payload(frame.payload)
-
-
-class _HdlProtocol(asyncio.DatagramProtocol):
-    """把 UDP 数据报交给 HdlGateway。"""
-
-    owner: HdlGateway | None = None
-
-    def datagram_received(self, data: bytes, addr: Any) -> None:  # noqa: ANN401
-        try:
-            frame = parse_frame(data)
-        except HdlFrameError as err:
-            LOGGER.debug("丢弃非法报文 %s: %s", addr, err)
-            return
-        if self.owner is not None:
-            self.owner._on_frame(frame)  # noqa: SLF001 - 同模块内协作
-
-    def error_received(self, exc: Exception) -> None:
-        LOGGER.debug("UDP 错误: %s", exc)
+            await self.client.async_request(TOPIC_HEARTBEAT.format(gw=self.oid), timeout=5)
+        except LinkError as err:
+            LOGGER.debug("心跳失败: %s", err)

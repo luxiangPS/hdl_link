@@ -1,202 +1,218 @@
-"""HDL LINK over IP —— 报文编解码（纯标准库，无 Home Assistant 依赖）。
+"""HDL LINK 协议编解码与 TCP 客户端。
 
-传输封装（UDP/6000，实测自 HDL 网关 192.168.1.150）：
+HDL 官方 Link 本地协议（配置走 TCP 8586，控制走 UDP；本集成统一走 TCP 8586，
+因为网关在同一 TCP 信道上同时接受 property 控制报文）：
 
-    [0:4]    发送方 IP（网关回包时是网关自己的 IP，请求时填本机 IP）
-    [4:14]   固定 ASCII  "HDLMIRACLE"
-    [14:16]  固定 0xAA 0xAA
-    [16:]    Buspro 内容：
-               0    长度 = 9(头) + len(payload) + 2(CRC)
-               1    发送方 subnet
-               2    发送方 device id
-               3:5  发送方 device type（大端）
-               5:7  命令码（大端）
-               7    目标 subnet
-               8    目标 device id
-               9..  payload
-    [-2:]    CRC16-XMODEM（覆盖 [16:] 到 payload 末尾）
+    Topic:/user/<gw_id>/custom/xxx\\r\\n
+    Length: <body 字节数>\\r\\n
+    \\r\\n
+    {"id": "...", ...}
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Final
+import asyncio
+import json
+import logging
+import re
+import time
+from typing import Any
 
-MAGIC: Final = b"HDLMIRACLE"
-MARK: Final = b"\xAA\xAA"
-HEADER_LEN: Final = 9
+LOGGER = logging.getLogger(__name__)
 
-# ---- 命令码（全部为真机实测命中的）----
-CMD_CHANNEL_CONTROL: Final = 0x0031  # 单通道控制   payload: ch, level, time(u16, 0.1s)
-CMD_CHANNEL_CONTROL_ACK: Final = 0x0032
-CMD_READ_CHANNELS: Final = 0x0033  # 读通道状态   payload: count(0x01 = 全部)
-CMD_CHANNELS_STATE: Final = 0x0034  # 应答         payload: count, level1..levelN
-CMD_READ_LEVEL: Final = 0x0038
-CMD_LEVEL_STATE: Final = 0x0039
-CMD_READ_SCENE: Final = 0x000C
-CMD_SCENE_STATE: Final = 0x000D
-CMD_SCENE_CONTROL: Final = 0xE01C  # 场景控制（HDL LINK 场景号 1-128）
-CMD_DRY_CONTACT: Final = 0x15D0  # 干接点广播   payload: area, channel, status(0=触发)
-CMD_READ_SENSOR: Final = 5636  # 0x1604 读温湿照
-CMD_SENSOR_STATE: Final = 5637  # 0x1605 应答   payload: success, value, lux(u16)
-CMD_SENSOR_REPORT: Final = 5680  # 0x1630 主动上报（同上结构）
-CMD_CURTAIN: Final = 0xE3E2  # 窗帘控制（无应答）
-CMD_AC: Final = 0x1938  # 空调控制（无应答，本型号 0x0DE5 不实现）
-
-CMD_NAMES: Final = {
-    CMD_CHANNEL_CONTROL: "单通道控制",
-    CMD_CHANNEL_CONTROL_ACK: "单通道控制应答",
-    CMD_READ_CHANNELS: "读通道状态",
-    CMD_CHANNELS_STATE: "读通道状态应答",
-    CMD_READ_LEVEL: "读当前亮度",
-    CMD_LEVEL_STATE: "读当前亮度应答",
-    CMD_DRY_CONTACT: "干接点广播",
-    CMD_READ_SENSOR: "读温湿照",
-    CMD_SENSOR_STATE: "温湿照应答",
-    CMD_SENSOR_REPORT: "温湿照上报",
-    CMD_CURTAIN: "窗帘控制",
-    CMD_AC: "空调控制",
-}
-
-# ---- 设备类型（大端字段里的 device type）----
-DEV_TYPE_RELAY48: Final = 3557  # 0x0DE5，实测 48 通道继电器/调光
-DEV_TYPE_SENSOR: Final = 1513  # 0x05E9，温湿照 + 干接点
-
-DEV_TYPE_NAMES: Final = {
-    DEV_TYPE_RELAY48: "48 通道继电器/调光主机",
-    DEV_TYPE_SENSOR: "温湿度照度传感器",
-}
-
-# ---- 第三方发送方身份（HDL 网关接受任意 (subnet,id,type)，这里用一个不冲突的固定值）----
-SENDER_SUBNET: Final = 253
-SENDER_DEVICE: Final = 254
-SENDER_TYPE: Final = 0xFFFE
-
-DEFAULT_PORT: Final = 6000
-DEFAULT_SUBNET: Final = 1
-TEMPERATURE_OFFSET: Final = -20  # 实测：原始值 47 -> 27.0 °C
+_HEADER = re.compile(rb"Topic:(.*?)\r\nLength:\s*(\d+)\r\n\r\n")
+_PORT = 8586
 
 
-def crc16_xmodem(data: bytes) -> int:
-    """CRC16-XMODEM：poly 0x1021，init 0，不反射。"""
-    crc = 0
-    for byte in data:
-        crc ^= (byte << 8) & 0xFFFF
-        for _ in range(8):
-            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
-    return crc
+def encode_frame(topic: str, body: dict[str, Any]) -> bytes:
+    """把 topic + JSON body 封装成一帧。"""
+    js = json.dumps(body, ensure_ascii=False, separators=(",", ":"))
+    raw = js.encode("utf-8")
+    head = "Topic:%s\r\nLength: %d\r\n\r\n" % (topic, len(raw))
+    return head.encode("utf-8") + raw
 
 
-def build_frame(
-    source_ip: str,
-    *,
-    code: int,
-    target: tuple[int, int],
-    payload: bytes = b"",
-    sender: tuple[int, int, int] = (SENDER_SUBNET, SENDER_DEVICE, SENDER_TYPE),
-) -> bytes:
-    """构造完整 UDP 报文。target=(subnet, device)。"""
-    ip_bytes = bytes(int(part) for part in source_ip.split("."))
-    header = bytearray(HEADER_LEN)
-    header[0] = HEADER_LEN + len(payload) + 2
-    header[1] = sender[0] & 0xFF
-    header[2] = sender[1] & 0xFF
-    header[3:5] = (sender[2] & 0xFFFF).to_bytes(2, "big")
-    header[5:7] = (code & 0xFFFF).to_bytes(2, "big")
-    header[7] = target[0] & 0xFF
-    header[8] = target[1] & 0xFF
-    content = bytes(header) + payload
-    return ip_bytes + MAGIC + MARK + content + crc16_xmodem(content).to_bytes(2, "big")
+def decode_frames(buf: bytes) -> tuple[list[tuple[str, bytes]], bytes]:
+    """从字节流里切出完整帧，返回 (帧列表, 剩余未完成字节)。"""
+    frames: list[tuple[str, bytes]] = []
+    pos = 0
+    while True:
+        match = _HEADER.search(buf, pos)
+        if match is None:
+            break
+        start = match.end()
+        size = int(match.group(2))
+        if len(buf) - start < size:
+            # 帧不完整，保留从 match 起的原始数据
+            return frames, buf[match.start():]
+        frames.append((match.group(1).decode("utf-8", "ignore"), buf[start:start + size]))
+        pos = start + size
+    return frames, buf[pos:]
 
 
-@dataclass(slots=True, frozen=True)
-class HdlFrame:
-    """解析后的报文。"""
+def now_ms() -> str:
+    return str(int(time.time() * 1000))
 
-    source_ip: str
-    sender: tuple[int, int, int]
-    target: tuple[int, int]
-    code: int
-    payload: bytes
 
+class LinkError(Exception):
+    """LINK 通信错误。"""
+
+
+class LinkClient:
+    """到 HDL 网关的 LINK TCP 客户端，自带编号/匹配与断线重连。"""
+
+    def __init__(self, host: str, port: int = _PORT, timeout: float = 6.0) -> None:
+        self.host = host
+        self.port = port
+        self.timeout = timeout
+        self._reader: asyncio.StreamReader | None = None
+        self._writer: asyncio.StreamWriter | None = None
+        self._reader_task: asyncio.Task[None] | None = None
+        self._pending: dict[str, asyncio.Future] = {}
+        self._seq = 0
+        self._lock = asyncio.Lock()
+        self._push_queue: asyncio.Queue[tuple[str, bytes]] = asyncio.Queue(maxsize=64)
+
+    # ------------------------------------------------------------------ 连接
     @property
-    def address(self) -> str:
-        return f"{self.sender[0]}.{self.sender[1]}"
+    def connected(self) -> bool:
+        return self._writer is not None and not self._writer.is_closing()
 
-    @property
-    def code_name(self) -> str:
-        return CMD_NAMES.get(self.code, f"未知命令 0x{self.code:04X}")
+    async def async_connect(self) -> None:
+        if self.connected:
+            return
+        try:
+            self._reader, self._writer = await asyncio.wait_for(
+                asyncio.open_connection(self.host, self.port), timeout=12
+            )
+        except (OSError, asyncio.TimeoutError) as err:
+            raise LinkError(f"连接 {self.host}:{self.port} 失败: {err}") from err
+        self._reader_task = asyncio.create_task(self._async_reader())
+        LOGGER.debug("HDL LINK 已连接 %s:%s", self.host, self.port)
 
+    async def async_close(self) -> None:
+        if self._reader_task is not None:
+            self._reader_task.cancel()
+            self._reader_task = None
+        if self._writer is not None:
+            try:
+                self._writer.close()
+                await self._writer.wait_closed()
+            except OSError:
+                pass
+            self._writer = None
+        self._reader = None
+        for fut in self._pending.values():
+            if not fut.done():
+                fut.cancel()
+        self._pending.clear()
 
-class HdlFrameError(ValueError):
-    """报文不合法（魔数/CRC/长度不符）。"""
+    async def _async_reader(self) -> None:
+        buf = b""
+        assert self._reader is not None
+        try:
+            while True:
+                chunk = await self._reader.read(65536)
+                if not chunk:
+                    break
+                buf += chunk
+                frames, buf = decode_frames(buf)
+                for topic, raw in frames:
+                    self._dispatch(topic, raw)
+        except (asyncio.CancelledError, OSError):
+            pass
+        finally:
+            writer, self._writer = self._writer, None
+            if writer is not None:
+                try:
+                    writer.close()
+                except OSError:
+                    pass
+            for fut in self._pending.values():
+                if not fut.done():
+                    fut.set_exception(LinkError("连接已断开"))
+            self._pending.clear()
 
+    def _dispatch(self, topic: str, raw: bytes) -> None:
+        try:
+            body = json.loads(raw)
+        except (ValueError, UnicodeDecodeError):
+            return
+        if not isinstance(body, dict):
+            return
+        msg_id = body.get("id")
+        fut = self._pending.get(str(msg_id)) if msg_id is not None else None
+        if fut is not None and not fut.done():
+            fut.set_result((topic, body))
+            return
+        if topic.endswith("_reply"):
+            LOGGER.debug("未匹配的响应 %s: %.200s", topic, raw)
+            return
+        # 主动上报（网关用加密载荷推送，本集成不解析，靠轮询取状态）
+        LOGGER.debug("网关主动上报 %s（未解析）", topic)
 
-def parse_frame(data: bytes) -> HdlFrame:
-    """解析一个 UDP 报文，非法时抛 HdlFrameError。"""
-    if len(data) < 16 + HEADER_LEN + 2:
-        raise HdlFrameError("报文过短")
-    if data[4:14] != MAGIC or data[14:16] != MARK:
-        raise HdlFrameError("魔数不符")
+    # ------------------------------------------------------------------ 请求
+    async def async_request(
+        self,
+        topic: str,
+        body: dict[str, Any] | None = None,
+        *,
+        timeout: float | None = None,
+        retry: int = 1,
+    ) -> dict[str, Any]:
+        """发一帧并等待同 id 的响应。"""
+        payload = dict(body or {})
+        timeout = timeout or self.timeout
+        last_err: Exception | None = None
+        for attempt in range(retry + 1):
+            try:
+                await self.async_connect()
+                async with self._lock:
+                    self._seq = (self._seq + 1) % 0x7FFFFFFF
+                    msg_id = str(self._seq)
+                    payload["id"] = msg_id
+                    payload.setdefault("time_stamp", now_ms())
+                    fut: asyncio.Future = asyncio.get_running_loop().create_future()
+                    self._pending[msg_id] = fut
+                    assert self._writer is not None
+                    self._writer.write(encode_frame(topic, payload))
+                    await self._writer.drain()
+                try:
+                    resp_topic, resp = await asyncio.wait_for(fut, timeout=timeout)
+                finally:
+                    self._pending.pop(msg_id, None)
+                if resp.get("code") not in (None, "0", "200", 0, 200):
+                    LOGGER.debug("%s 返回 %s %s", resp_topic, resp.get("code"), resp.get("msg"))
+                return resp
+            except (OSError, LinkError, asyncio.TimeoutError) as err:
+                last_err = err
+                await self.async_close()
+                if attempt >= retry:
+                    break
+                await asyncio.sleep(0.3)
+        raise LinkError(f"请求 {topic} 失败: {last_err}")
 
-    content = data[16:-2]
-    if crc16_xmodem(content) != int.from_bytes(data[-2:], "big"):
-        raise HdlFrameError("CRC 校验失败")
-
-    declared = content[0]
-    payload_end = declared - 2 if declared >= HEADER_LEN + 2 else len(content)
-    return HdlFrame(
-        source_ip=".".join(str(b) for b in data[0:4]),
-        sender=(content[1], content[2], int.from_bytes(content[3:5], "big")),
-        target=(content[7], content[8]),
-        code=int.from_bytes(content[5:7], "big"),
-        payload=content[HEADER_LEN:payload_end],
-    )
-
-
-# ---- payload 解析工具 ----
-
-
-def build_channel_control(channel: int, level: int, ramp_tenth_sec: int = 0) -> bytes:
-    """0x0031：channel(1-48), level(0-100), 渐变时间(0.1s 单位)。"""
-    return bytes([channel & 0xFF, max(0, min(100, level)) & 0xFF,
-                  (ramp_tenth_sec >> 8) & 0xFF, ramp_tenth_sec & 0xFF])
-
-
-def parse_channel_states(payload: bytes) -> dict[int, int]:
-    """0x0034：把 [count][level...] 解析成 {channel: level}。"""
-    if not payload:
-        return {}
-    count = payload[0]
-    levels = payload[1:1 + count]
-    return {idx + 1: levels[idx] for idx in range(len(levels))}
-
-
-def parse_sensor_payload(payload: bytes) -> dict[str, float]:
-    """0x1605/0x1630：[success][value][lux:u16be]。"""
-    result = {"success": float(payload[0]) if payload else 0.0}
-    if len(payload) >= 2:
-        result["temperature"] = float(payload[1] + TEMPERATURE_OFFSET)
-    if len(payload) >= 4:
-        result["illuminance"] = float(int.from_bytes(payload[2:4], "big"))
-    return result
-
-
-def build_curtain_command(channel: int, action: int) -> bytes:
-    """0xE3E2：action 0=停 1=开 2=关（窗帘为脉冲式，无位置回读）。"""
-    return bytes([channel & 0xFF, action & 0xFF])
-
-
-def parse_scene_payload(payload: bytes) -> dict[int, int]:
-    """0x000D：把 [数量][状态1]…[状态N] 解析成 {场景号: 状态}。"""
-    if not payload:
-        return {}
-    count = payload[0]
-    states = payload[1:1 + count]
-    return {idx + 1: states[idx] for idx in range(len(states))}
-
-
-def build_scene_command(scene: int) -> bytes:
-    """0xE01C：场景号 1-128，payload 高位保留 0。"""
-    scene = max(1, min(128, scene))
-    return bytes([scene & 0xFF, 0x00])
+    async def async_request_raw(
+        self, topic: str, body: dict[str, Any] | None = None, **kw
+    ) -> tuple[str, dict[str, Any]]:
+        """返回 (响应 topic, 响应体)。"""
+        payload = dict(body or {})
+        # 复用 async_request 的匹配逻辑：这里单独实现以保留 topic
+        timeout = kw.get("timeout") or self.timeout
+        await self.async_connect()
+        async with self._lock:
+            self._seq += 1
+            msg_id = str(self._seq)
+            payload["id"] = msg_id
+            payload.setdefault("time_stamp", now_ms())
+            fut = asyncio.get_running_loop().create_future()
+            self._pending[msg_id] = fut
+            assert self._writer is not None
+            self._writer.write(encode_frame(topic, payload))
+            await self._writer.drain()
+        try:
+            return await asyncio.wait_for(fut, timeout=timeout)
+        except (asyncio.TimeoutError, LinkError) as err:
+            raise LinkError(f"请求 {topic} 超时: {err}") from err
+        finally:
+            self._pending.pop(msg_id, None)

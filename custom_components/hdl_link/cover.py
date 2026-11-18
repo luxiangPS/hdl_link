@@ -1,8 +1,15 @@
-"""窗帘 → cover（0xE3E2 脉冲式：开/关/停，无位置回读）。"""
+"""窗帘实体（百叶 / 卷帘 / 开合帘）：按网关上送的位置百分比控制。
+
+说明：该类型的位置属性键在 HDL LINK 文档中未固定给出，
+集成按 position / percent 两个键自适应读取；读不到值时不报位置，只提供开/关/停。
+"""
 
 from __future__ import annotations
 
+from typing import Any
+
 from homeassistant.components.cover import (
+    ATTR_POSITION,
     CoverDeviceClass,
     CoverEntity,
     CoverEntityFeature,
@@ -11,70 +18,58 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .config_data import merged_config
-from .const import CONF_COVERS, DOMAIN
-from .entity import HdlEntity, device_type_of, parse_address
-from .protocol import CMD_CURTAIN, build_curtain_command
+from .const import DOMAIN, KEY_ON_OFF, KEY_PERCENT, KEY_POSITION
+from .coordinator import HdlCoordinator
+from .entity import HdlEntity, numeric
 
-ACTION_STOP = 0
-ACTION_OPEN = 1
-ACTION_CLOSE = 2
+PARALLEL_UPDATES = 0
 
 
 async def async_setup_entry(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
+    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
-    runtime = hass.data[DOMAIN][entry.entry_id]
-    cfg = merged_config(entry)
-    entities: list[HdlCover] = []
-    for key in cfg.get(CONF_COVERS, []):
-        address_text, channel_text = str(key).split("/")
-        entities.append(HdlCover(runtime, entry, parse_address(address_text), int(channel_text), device_type_of(cfg, address_text)))
+    coordinator: HdlCoordinator = hass.data[DOMAIN][entry.entry_id]
+    entities = [
+        HdlCover(coordinator, config)
+        for config in coordinator.entities.values()
+        if config.get("platform") == "cover"
+    ]
     async_add_entities(entities)
 
 
-class HdlCover(HdlEntity):
-    """脉冲式窗帘：只上报「正在运动」状态，位置由用户设定的行程时间决定。"""
+class HdlCover(HdlEntity, CoverEntity):
+    """HDL 窗帘。"""
 
-    _attr_device_class = CoverDeviceClass.SHADE
-    _attr_supported_features = (
-        CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE | CoverEntityFeature.STOP
-    )
-    _attr_assumed_state = True
+    _attr_has_entity_name = True
+    _attr_device_class = CoverDeviceClass.CURTAIN
 
-    def __init__(self, runtime, entry, address, channel: int, device_type: int = 0) -> None:
-        super().__init__(runtime, entry, address, device_type, key=f"ch{channel}-cover")
-        self.channel = channel
-        self._attr_name = f"通道{channel}（窗帘）"
-        self._moving = False
+    def __init__(self, coordinator: HdlCoordinator, config: dict[str, Any]) -> None:
+        super().__init__(coordinator, config, "cover")
+        self._attr_name = self.func_name
+        self._attr_supported_features = (
+            CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE | CoverEntityFeature.SET_POSITION
+        )
+
+    @property
+    def current_cover_position(self) -> int | None:
+        raw = numeric(self.value(KEY_POSITION, KEY_PERCENT))
+        if raw is None:
+            return None
+        return max(0, min(100, round(raw)))
 
     @property
     def is_closed(self) -> bool | None:
-        # 无位置回读，返回 None 表示状态未知（HA 会显示为「未知」而不是猜测）
-        return None
+        position = self.current_cover_position
+        if position is not None:
+            return position == 0
+        on_off = self.is_on(KEY_ON_OFF)
+        return None if on_off is None else not on_off
 
-    @property
-    def is_opening(self) -> bool:
-        return self._moving
+    async def async_open_cover(self, **kwargs: Any) -> None:
+        await self.async_write(**{KEY_POSITION: "100"})
 
-    @property
-    def is_closing(self) -> bool:
-        return False
+    async def async_close_cover(self, **kwargs: Any) -> None:
+        await self.async_write(**{KEY_POSITION: "0"})
 
-    async def _send(self, action: int) -> None:
-        self._moving = action != ACTION_STOP
-        await self.runtime.gateway.async_send(
-            CMD_CURTAIN, self.address, build_curtain_command(self.channel, action)
-        )
-        self.async_write_ha_state()
-
-    async def async_open_cover(self, **kwargs) -> None:
-        await self._send(ACTION_OPEN)
-
-    async def async_close_cover(self, **kwargs) -> None:
-        await self._send(ACTION_CLOSE)
-
-    async def async_stop_cover(self, **kwargs) -> None:
-        await self._send(ACTION_STOP)
+    async def async_set_cover_position(self, **kwargs: Any) -> None:
+        await self.async_write(**{KEY_POSITION: str(int(kwargs[ATTR_POSITION]))})

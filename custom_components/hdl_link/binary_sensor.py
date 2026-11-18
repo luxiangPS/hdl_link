@@ -1,72 +1,63 @@
-"""门铃 / 干接点 → binary_sensor（监听 0x15D0 广播，status=0 表示触发）。"""
+"""二元传感器实体：PIR / 门磁 / 烟雾 / 燃气 / 水浸 / 求助 / 干接点。"""
 
 from __future__ import annotations
 
-from homeassistant.components.binary_sensor import (
-    BinarySensorDeviceClass,
-    BinarySensorEntity,
-)
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.event import async_call_later
+from typing import Any
 
-from .config_data import merged_config
-from .const import CONF_DOORBELLS, DOORBELL_EVENT_TIMEOUT, DOMAIN
-from .entity import HdlEntity, device_type_of, parse_address
-from .protocol import CMD_DRY_CONTACT
+from homeassistant.components.binary_sensor import BinarySensorDeviceClass, BinarySensorEntity
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
+from .const import BINARY_SENSOR_KEYS, DOMAIN, ON_VALUES
+from .coordinator import HdlCoordinator
+from .entity import HdlEntity
+
+PARALLEL_UPDATES = 0
+
+DEVICE_CLASS_MAP = {
+    "motion": BinarySensorDeviceClass.MOTION,
+    "door": BinarySensorDeviceClass.DOOR,
+    "smoke": BinarySensorDeviceClass.SMOKE,
+    "gas": BinarySensorDeviceClass.GAS,
+    "moisture": BinarySensorDeviceClass.MOISTURE,
+    "problem": BinarySensorDeviceClass.PROBLEM,
+}
 
 
 async def async_setup_entry(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
+    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
-    runtime = hass.data[DOMAIN][entry.entry_id]
-    cfg = merged_config(entry)
+    coordinator: HdlCoordinator = hass.data[DOMAIN][entry.entry_id]
     entities = [
-        HdlDoorbell(runtime, entry, parse_address(str(address_text)), device_type_of(cfg, address_text))
-        for address_text in cfg.get(CONF_DOORBELLS, [])
+        HdlBinarySensor(coordinator, config)
+        for config in coordinator.entities.values()
+        if config.get("platform") == "binary_sensor" and str(config.get("spk")) in BINARY_SENSOR_KEYS
     ]
     async_add_entities(entities)
 
 
-class HdlDoorbell(HdlEntity):
-    """干接点事件型传感器：收到广播置 on，DOORBELL_EVENT_TIMEOUT 秒后自动回到 off。"""
+class HdlBinarySensor(HdlEntity, BinarySensorEntity):
+    """HDL 开关量传感器。"""
 
-    _attr_device_class = BinarySensorDeviceClass.OCCUPANCY
-    _attr_icon = "mdi:doorbell"
+    _attr_has_entity_name = True
 
-    def __init__(self, runtime, entry, address, device_type: int = 0) -> None:
-        super().__init__(runtime, entry, address, device_type, key="doorbell")
-        self._attr_name = "门铃"
-        self._is_on = False
-        self._reset_handle = None
+    def __init__(self, coordinator: HdlCoordinator, config: dict[str, Any]) -> None:
+        super().__init__(coordinator, config, "binary_sensor")
+        spk = str(config.get("spk"))
+        key, device_class = BINARY_SENSOR_KEYS[spk]
+        self._key = key
+        self._attr_name = self.func_name
+        if device_class in DEVICE_CLASS_MAP:
+            self._attr_device_class = DEVICE_CLASS_MAP[device_class]
 
     @property
-    def is_on(self) -> bool:
-        return self._is_on
+    def is_on(self) -> bool | None:
+        raw = self.value(self._key)
+        if raw is None:
+            return None
+        return str(raw).strip().lower() in ON_VALUES
 
-    @callback
-    def _handle_update(self, frame=None) -> None:
-        if frame is None or frame.code != CMD_DRY_CONTACT:
-            return
-        if frame.sender[0:2] != self.address:
-            return
-        payload = frame.payload
-        # payload: area, channel, status；status == 0 表示触发
-        if len(payload) < 3 or payload[2] != 0:
-            return
-        self._is_on = True
-        self.async_write_ha_state()
-        if self._reset_handle is not None:
-            self._reset_handle()
-        self._reset_handle = async_call_later(
-            self.hass, DOORBELL_EVENT_TIMEOUT, self._async_reset
-        )
-
-    @callback
-    def _async_reset(self, _now=None) -> None:
-        self._is_on = False
-        self._reset_handle = None
-        self.async_write_ha_state()
+    @property
+    def available(self) -> bool:
+        return super().available and self.value(self._key) is not None
