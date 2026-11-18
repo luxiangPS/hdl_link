@@ -8,6 +8,7 @@ import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr
 
 from .const import CONF_GW_ID, DOMAIN, MANUFACTURER
@@ -36,7 +37,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await coordinator.async_connect()
     except (LinkError, OSError) as err:
         LOGGER.error("连接 HDL 网关 %s 失败: %s", entry.data.get("host"), err)
-        raise
+        raise ConfigEntryNotReady(f"无法连接 HDL 网关 {entry.data.get('host')}: {err}") from err
 
     await coordinator.async_config_entry_first_refresh()
 

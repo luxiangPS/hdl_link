@@ -39,7 +39,7 @@ class HdlSwitch(HdlEntity, SwitchEntity):
 
     @property
     def is_on(self) -> bool | None:
-        return self.is_on(KEY_ON_OFF)
+        return self.on_state(KEY_ON_OFF)
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         await self.async_write(**{KEY_ON_OFF: "on"})

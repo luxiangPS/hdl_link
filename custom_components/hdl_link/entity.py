@@ -65,7 +65,8 @@ class HdlEntity(CoordinatorEntity[HdlCoordinator]):
                 return self.values[key]
         return None
 
-    def is_on(self, *keys: str) -> bool | None:
+    def on_state(self, *keys: str) -> bool | None:
+        """按 on_off 类键判断开/关（不与实体的 is_on 属性冲突）。"""
         raw = self.value(*(keys or ("on_off",)))
         if raw is None:
             return None

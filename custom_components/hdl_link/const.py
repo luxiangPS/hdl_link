@@ -98,7 +98,7 @@ KEY_CURRENT: Final = "current"
 KEY_BRIGHTNESS: Final = "brightness"
 KEY_COLOR_TEMP: Final = "color_temp"
 KEY_POSITION: Final = "position"
-KEY_PERCCENT: Final = "percent"
+KEY_PERCENT: Final = "percent"
 
 # 各 spk 的状态键 -> 含义
 SENSOR_KEYS: Final[dict[str, tuple[str, str, str | None]]] = {

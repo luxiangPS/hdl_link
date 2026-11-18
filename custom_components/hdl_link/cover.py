@@ -62,7 +62,7 @@ class HdlCover(HdlEntity, CoverEntity):
         position = self.current_cover_position
         if position is not None:
             return position == 0
-        on_off = self.is_on(KEY_ON_OFF)
+        on_off = self.on_state(KEY_ON_OFF)
         return None if on_off is None else not on_off
 
     async def async_open_cover(self, **kwargs: Any) -> None:

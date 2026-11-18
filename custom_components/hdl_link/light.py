@@ -50,7 +50,7 @@ class HdlLight(HdlEntity, LightEntity):
 
     @property
     def is_on(self) -> bool | None:
-        return self.is_on(KEY_ON_OFF)
+        return self.on_state(KEY_ON_OFF)
 
     @property
     def brightness(self) -> int | None:

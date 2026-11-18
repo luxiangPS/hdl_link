@@ -60,13 +60,17 @@ async def _probe(host: str, port: int, timeout: float) -> GatewayInfo | None:
 async def async_scan(
     extra_hosts: list[str] | None = None,
     *,
-    timeout: float = 4.0,
+    timeout: float = 12.0,
     port: int = DEFAULT_PORT,
 ) -> list[GatewayInfo]:
-    """扫描本机各网段的 254 个地址（并发），返回应答的 HDL 网关。"""
+    """扫描本机各网段的地址（并发，总时限 timeout 秒），返回应答的 HDL 网关。
+
+    extra_hosts 非空时只探测这些地址，不再全段扫描。
+    """
     hosts: set[str] = set(extra_hosts or [])
-    for net in local_ipv4_networks():
-        hosts.update(_hosts_in(net))
+    if not hosts:
+        for net in local_ipv4_networks():
+            hosts.update(_hosts_in(net))
     if not hosts:
         return []
 
@@ -80,6 +84,9 @@ async def async_scan(
                 if all(info.oid != x.oid for x in results):
                     results.append(info)
 
-    await asyncio.gather(*(guarded(h) for h in hosts), return_exceptions=True)
+    tasks = [asyncio.create_task(guarded(h)) for h in hosts]
+    _, pending = await asyncio.wait(tasks, timeout=timeout)
+    for task in pending:
+        task.cancel()
     LOGGER.debug("扫描 %d 个地址，发现 %d 个 HDL 网关", len(hosts), len(results))
     return results

@@ -22,6 +22,8 @@ from .const import (
     DEFAULT_POLL_INTERVAL,
     DEFAULT_PORT,
     DOMAIN,
+    MAX_POLL_INTERVAL,
+    MIN_POLL_INTERVAL,
     NAME,
     PLATFORM_TITLES,
     SPK_PLATFORM,
@@ -95,6 +97,7 @@ class HdlLinkConfigFlow(ConfigFlow, domain=DOMAIN):
                 LOGGER.warning("连接 %s 失败: %s", host, err)
                 errors["base"] = "cannot_connect"
             else:
+                self._async_check_duplicate(self._info)
                 if not self._functions:
                     errors["base"] = "no_functions"
                 else:
@@ -136,6 +139,7 @@ class HdlLinkConfigFlow(ConfigFlow, domain=DOMAIN):
                 LOGGER.warning("连接 %s 失败: %s", host, err)
                 errors["base"] = "cannot_connect"
             else:
+                self._async_check_duplicate(self._info)
                 if not self._functions:
                     errors["base"] = "no_functions"
                 else:
@@ -286,32 +290,34 @@ class HdlLinkConfigFlow(ConfigFlow, domain=DOMAIN):
     @staticmethod
     @callback
     def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
-        return HdlLinkOptionsFlow(config_entry)
+        return HdlLinkOptionsFlow()
 
 
 class HdlLinkOptionsFlow(OptionsFlow):
-    """已接入后的再配置：改轮询周期、重选实体与场景。"""
+    """已接入后的再配置：改轮询周期。"""
 
-    def __init__(self, entry: ConfigEntry) -> None:
-        self.entry = entry
+    def __init__(self) -> None:
         self._functions: list[FunctionInfo] = []
         self._scenes: list[dict[str, Any]] = []
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         if user_input is not None:
             return self.async_create_entry(data=user_input)
-        current = self.entry.options.get(CONF_POLL_INTERVAL, self.entry.data.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL))
+        current = self.config_entry.options.get(
+            CONF_POLL_INTERVAL,
+            self.config_entry.data.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL),
+        )
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
                 {
                     vol.Optional(CONF_POLL_INTERVAL, default=current): selector.NumberSelector(
                         selector.NumberSelectorConfig(
-                            min=3, max=120, step=1, unit_of_measurement="秒",
+                            min=MIN_POLL_INTERVAL, max=MAX_POLL_INTERVAL, step=1, unit_of_measurement="秒",
                             mode=selector.NumberSelectorMode.BOX,
                         )
                     )
                 }
             ),
-            description_placeholders={"host": self.entry.data.get(CONF_HOST, "")},
+            description_placeholders={"host": self.config_entry.data.get(CONF_HOST, "")},
         )
