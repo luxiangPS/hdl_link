@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "选择 HDL 网关",
-        "description": "已在当前网络中发现 {count} 台 HDL 网关（LINK 协议，TCP 8586）。选择要接入的网关；若未发现，请选「手动输入网关 IP」。",
+        "description": "已在当前网络中发现 {count} 台 HDL 网关。选择要接入的网关；若未发现，请选「手动输入网关 IP」。",
         "data": {
           "gateway": "网关"
         }
@@ -38,7 +38,7 @@
       }
     },
     "error": {
-      "cannot_connect": "无法连接该网关：请确认 IP、网络互通，且 8586 端口可达。",
+      "cannot_connect": "无法连接该网关：请确认 IP 正确、网络互通并允许本地连接。",
       "no_functions": "已连上网关，但网关内没有读到任何功能。请确认网关工程已配置设备功能。",
       "no_selection": "请至少勾选一个功能。"
     },

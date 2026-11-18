@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Select an HDL gateway",
-        "description": "Found {count} HDL gateway(s) on this network (LINK protocol, TCP 8586). Pick the gateway to connect, or choose \"Enter gateway IP manually\" if nothing was found.",
+        "description": "Found {count} HDL gateway(s) on this network. Pick the gateway to connect, or choose \"Enter gateway IP manually\" if nothing was found.",
         "data": {
           "gateway": "Gateway"
         }
@@ -38,7 +38,7 @@
       }
     },
     "error": {
-      "cannot_connect": "Cannot reach the gateway: check the IP, network reachability and that TCP 8586 is open.",
+      "cannot_connect": "Cannot reach the gateway: check the IP, network reachability and that the gateway allows local connections.",
       "no_functions": "Connected, but no function was returned. Make sure the gateway project has devices configured.",
       "no_selection": "Select at least one function."
     },
