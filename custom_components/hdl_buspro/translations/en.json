@@ -1,0 +1,40 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to HDL gateway",
+        "description": "Enter the gateway IP. The integration scans the bus over UDP 6000; close HDL Buspro Setup Tool first, it occupies the same port.",
+        "data": {
+          "host": "Gateway IP",
+          "port": "UDP port",
+          "subnet": "Bus subnet"
+        }
+      },
+      "devices": {
+        "title": "Select devices",
+        "description": "{count} device(s) found. Pick the ones to expose in Home Assistant.",
+        "data": {
+          "devices": "Devices"
+        }
+      },
+      "mapping": {
+        "title": "Assign channel roles",
+        "description": "Optional. Format: address/channel, comma separated, e.g. 10.100/9, 10.100/10. Channels left out become switches. Hint: {relay_hint}",
+        "data": {
+          "dimmers": "Dimmable channels (light)",
+          "covers": "Curtain channels (cover)",
+          "doorbells": "Doorbell devices (binary_sensor)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Gateway did not respond. Check IP, port and network.",
+      "no_devices": "No device found. Check the subnet number.",
+      "port_in_use": "Local UDP 6000 is busy. Close HDL tools or an old bridge process.",
+      "unknown": "Unknown error, see logs."
+    },
+    "abort": {
+      "already_configured": "This gateway is already configured."
+    }
+  }
+}
