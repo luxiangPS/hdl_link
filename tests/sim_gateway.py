@@ -1,4 +1,4 @@
-"""HDL Buspro 模拟网关（用于无真机调试集成）。
+"""HDL LINK 模拟网关（用于无真机调试集成）。
 
 监听 127.0.0.1:6100，按真机实测的报文格式应答：
 
@@ -20,9 +20,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from tests import _bootstrap  # noqa: E402,F401  （安装 hdl_buspro 命名空间包）
+from tests import _bootstrap  # noqa: E402,F401  （安装 hdl_link 命名空间包）
 
-from hdl_buspro.protocol import (  # noqa: E402
+from hdl_link.protocol import (  # noqa: E402
     CMD_CHANNELS_STATE,
     CMD_DRY_CONTACT,
     CMD_READ_CHANNELS,

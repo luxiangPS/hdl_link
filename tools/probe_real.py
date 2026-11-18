@@ -3,7 +3,7 @@
 与桥接方案的区别：这里不经过 MQTT、不经过 HA，直接验证集成代码本身。
 
 前置条件（脚本会自己检查）：
-  * 本机 UDP 6000 必须空闲 —— 关掉 HDL Buspro Setup Tool / Buspro Studio，
+  * 本机 UDP 6000 必须空闲 —— 关掉 HDL LINK Setup Tool / Buspro Studio，
     并先运行「停止真机桥接.bat」，否则网关只会把应答回给占着 6000 的那个程序。
 
 判定四条（缺一不可）：
@@ -29,9 +29,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from tests import _bootstrap  # noqa: E402,F401
 
-discovery = importlib.import_module("hdl_buspro.discovery")
-gateway_mod = importlib.import_module("hdl_buspro.gateway")
-protocol = importlib.import_module("hdl_buspro.protocol")
+discovery = importlib.import_module("hdl_link.discovery")
+gateway_mod = importlib.import_module("hdl_link.gateway")
+protocol = importlib.import_module("hdl_link.protocol")
 
 PASSED: list[str] = []
 FAILED: list[str] = []
@@ -63,7 +63,7 @@ async def main() -> int:
 
     if not port6000_free():
         print("本机 UDP 6000 被占用，网关应答会被别的程序截走。")
-        print("请先关闭 HDL Buspro Setup Tool / Buspro Studio，并运行「停止真机桥接.bat」。")
+        print("请先关闭 HDL LINK Setup Tool / Buspro Studio，并运行「停止真机桥接.bat」。")
         return 2
 
     client = gateway_mod.HdlGateway(args.host, 6000, source_ip=args.source_ip, timeout=2.0)

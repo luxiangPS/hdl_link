@@ -22,11 +22,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from tests import _bootstrap  # noqa: E402,F401  （安装 hdl_buspro 命名空间包）
+from tests import _bootstrap  # noqa: E402,F401  （安装 hdl_link 命名空间包）
 
-protocol = importlib.import_module("hdl_buspro.protocol")
-gateway_mod = importlib.import_module("hdl_buspro.gateway")
-discovery_mod = importlib.import_module("hdl_buspro.discovery")
+protocol = importlib.import_module("hdl_link.protocol")
+gateway_mod = importlib.import_module("hdl_link.gateway")
+discovery_mod = importlib.import_module("hdl_link.discovery")
 sim = importlib.import_module("tests.sim_gateway")
 
 PASSED: list[str] = []

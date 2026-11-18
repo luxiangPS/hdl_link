@@ -1,0 +1,14 @@
+{
+  "domain": "hdl_link",
+  "name": "HDL LINK",
+  "codeowners": ["@HDL"],
+  "config_flow": true,
+  "documentation": "https://github.com/luxiangPS/hdl_link",
+  "integration_type": "hub",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/luxiangPS/hdl_link/issues",
+  "loggers": ["custom_components.hdl_link"],
+  "quality_scale": "bronze",
+  "requirements": [],
+  "version": "1.0.0"
+}

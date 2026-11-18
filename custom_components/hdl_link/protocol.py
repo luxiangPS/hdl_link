@@ -1,4 +1,4 @@
-"""HDL Buspro over IP —— 报文编解码（纯标准库，无 Home Assistant 依赖）。
+"""HDL LINK over IP —— 报文编解码（纯标准库，无 Home Assistant 依赖）。
 
 传输封装（UDP/6000，实测自 HDL 网关 192.168.1.150）：
 
@@ -35,6 +35,7 @@ CMD_READ_LEVEL: Final = 0x0038
 CMD_LEVEL_STATE: Final = 0x0039
 CMD_READ_SCENE: Final = 0x000C
 CMD_SCENE_STATE: Final = 0x000D
+CMD_SCENE_CONTROL: Final = 0xE01C  # 场景控制（HDL LINK 场景号 1-128）
 CMD_DRY_CONTACT: Final = 0x15D0  # 干接点广播   payload: area, channel, status(0=触发)
 CMD_READ_SENSOR: Final = 5636  # 0x1604 读温湿照
 CMD_SENSOR_STATE: Final = 5637  # 0x1605 应答   payload: success, value, lux(u16)
@@ -184,3 +185,18 @@ def parse_sensor_payload(payload: bytes) -> dict[str, float]:
 def build_curtain_command(channel: int, action: int) -> bytes:
     """0xE3E2：action 0=停 1=开 2=关（窗帘为脉冲式，无位置回读）。"""
     return bytes([channel & 0xFF, action & 0xFF])
+
+
+def parse_scene_payload(payload: bytes) -> dict[int, int]:
+    """0x000D：把 [数量][状态1]…[状态N] 解析成 {场景号: 状态}。"""
+    if not payload:
+        return {}
+    count = payload[0]
+    states = payload[1:1 + count]
+    return {idx + 1: states[idx] for idx in range(len(states))}
+
+
+def build_scene_command(scene: int) -> bytes:
+    """0xE01C：场景号 1-128，payload 高位保留 0。"""
+    scene = max(1, min(128, scene))
+    return bytes([scene & 0xFF, 0x00])

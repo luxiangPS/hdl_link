@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Final
 
-DOMAIN: Final = "hdl_buspro"
-NAME: Final = "HDL Buspro"
+DOMAIN: Final = "hdl_link"
+NAME: Final = "HDL LINK"
 MANUFACTURER: Final = "HDL / 河东科技"
 
 CONF_HOST: Final = "host"
@@ -18,6 +18,14 @@ CONF_CHANNELS: Final = "channels"  # {"10.100": 48} 通道数量（扫描时由 
 CONF_DIMMERS: Final = "dimmers"  # 需要暴露成 light 的通道，形如 ["10.100/9", "10.100/10"]
 CONF_COVERS: Final = "covers"  # 需要暴露成 cover（脉冲式窗帘）的通道，形如 ["10.100/23"]
 CONF_DOORBELLS: Final = "doorbells"  # 需要暴露成门铃 binary_sensor 的设备，形如 ["10.3"]
+
+CONF_SCENES: Final = "scenes"  # 选中的场景号，形如 [1, 3, 5]
+CONF_SCENE_SUBNET: Final = "scene_subnet"  # 场景控制目标子网
+CONF_WORK_MODE: Final = "work_mode"  # 网关资源分配（0=单客户端）
+
+BUSPRO_PORT: Final = 6000
+DISCOVERY_WINDOW: Final = 3.0  # 秒，网关发现收包窗口
+DISCOVERY_SWEEP_LAST: Final = 254  # 本网段兜底扫描上限
 
 DEFAULT_PORT: Final = 6000
 DEFAULT_SCAN_SUBNET: Final = 1

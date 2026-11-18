@@ -1,0 +1,69 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Discover HDL LINK gateway",
+        "description": "Auto-discovered {count} gateway(s) answering on UDP 6000 (broadcast + LAN sweep). Pick the gateway to connect; choose \"Enter gateway IP manually\" if it is not listed. If port 6000 is reported busy, close HDL LINK Setup Tool or any other tool holding it first.",
+        "data": {
+          "host": "Gateway",
+          "port": "UDP port"
+        },
+        "data_description": {
+          "port": "Default 6000, must match the gateway panel setting"
+        }
+      },
+      "manual": {
+        "title": "Enter gateway manually",
+        "description": "Use when broadcast is blocked or the gateway lives on another subnet. The bus subnet number is detected automatically.",
+        "data": {
+          "host": "Gateway IP",
+          "port": "UDP port"
+        }
+      },
+      "devices": {
+        "title": "Select devices",
+        "description": "Gateway {host} (bus subnet {subnet} detected automatically) returned {count} device(s). Capabilities read from the bus: {summary}. Channels are expanded into switch/light entities automatically.",
+        "data": {
+          "devices": "Devices"
+        }
+      },
+      "mapping": {
+        "title": "Assign functions and scenes",
+        "description": "Channels: {channel_hint}.\nScenes found: {scene_hint}.\nComma separated: dimmers 10.100/9, curtains 10.100/23, doorbell 10.3, scenes 1,3,5. Channels left unassigned become switches.",
+        "data": {
+          "dimmers": "Dimmer channels (as light)",
+          "covers": "Curtain channels (as cover)",
+          "doorbells": "Doorbell device (as binary_sensor)",
+          "scenes": "Scene numbers (as buttons)"
+        },
+        "data_description": {
+          "scenes": "HDL LINK scene numbers 1-128; pressing the button sends a scene recall"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Gateway did not answer. Check IP, port and network.",
+      "no_devices": "No device found while scanning. Check the gateway and bus wiring.",
+      "no_gateway": "No gateway answered the broadcast. Pick \"Enter gateway IP manually\" or check whether port 6000 is taken.",
+      "port_in_use": "Local UDP 6000 is busy. Close the HDL setup tool or any old bridge process.",
+      "unknown": "Unexpected error, see the log."
+    },
+    "abort": {
+      "already_configured": "This gateway is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Functions and scenes",
+        "description": "Saved changes reload the integration automatically.",
+        "data": {
+          "dimmers": "Dimmer channels (as light)",
+          "covers": "Curtain channels (as cover)",
+          "doorbells": "Doorbell device (as binary_sensor)",
+          "scenes": "Scene numbers (as buttons)"
+        }
+      }
+    }
+  }
+}

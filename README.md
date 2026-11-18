@@ -1,4 +1,4 @@
-# HDL Buspro for Home Assistant（HDL 官方版）
+# HDL LINK for Home Assistant（HDL 官方版）
 
 HDL（河东科技）自研的 Home Assistant 集成，直连 HDL 网关的 **Buspro over IP（UDP 6000）**，
 不依赖 MQTT、不依赖任何第三方库、不需要设备改固件。
@@ -13,10 +13,10 @@ HDL（河东科技）自研的 Home Assistant 集成，直连 HDL 网关的 **Bu
 |---|---|---|
 | 协议层 | `protocol.py` | 报文组包/解包、CRC16-XMODEM、命令码与设备类型表 |
 | 传输层 | `gateway.py` | asyncio UDP 客户端：请求-应答配对、状态缓存、事件回调 |
-| 发现层 | `discovery.py` | 一次发完 250×2 条探测包，2.5 秒窗口内收全部应答 |
+| 发现层 | `discovery.py` | 网关广播发现（UDP 6000 + 网段兜底）、250×2 探测包扫描设备、0x000C 读场景 |
 | 运行时 | `__init__.py` | 一网关一连接、通道 10s 轮询、传感器 20s 轮询、事件分发 |
-| 配置 | `config_flow.py` | 填 IP → 自动扫描 → 勾选设备 → 指定调光/窗帘/门铃 |
-| 实体 | `switch/light/cover/sensor/binary_sensor.py` | 五类实体，全部走 `HdlEntity` 基类 |
+| 配置 | `config_flow.py` | 自动发现网关 → 自动判定子网 → 勾选设备（含功能属性）→ 指定调光/窗帘/门铃/场景 |
+| 实体 | `switch/light/cover/sensor/binary_sensor/button.py` | 六类实体，全部走 `HdlEntity` 基类 |
 
 ### 能力矩阵（v1.0，均已真机或协议级验证）
 
@@ -38,23 +38,23 @@ HDL（河东科技）自研的 Home Assistant 集成，直连 HDL 网关的 **Bu
 
 ### 方式 A：HACS / Marketplace「从链接添加」（推荐，面向客户）
 
-1. 把本仓库推到 HDL 官方 GitHub（例如 `https://github.com/HDL/hdl_buspro`）。
+1. 把本仓库推到 HDL 官方 GitHub（例如 `https://github.com/HDL/hdl_link`）。
 2. HA → **Marketplace（HACS）→ 右上 ⋮ → 自定义仓库 → 添加**，填仓库地址，类别选 `Integration`。
-3. 搜索 `HDL Buspro` → 下载 → **重启 HA**。
-4. 设置 → 设备与服务 → **添加集成** → 搜 `HDL Buspro`。
+3. 搜索 `HDL LINK` → 下载 → **重启 HA**。
+4. 设置 → 设备与服务 → **添加集成** → 搜 `HDL LINK`。
 
-> Marketplace 只负责把文件放进 `config/custom_components/hdl_buspro`，
+> Marketplace 只负责把文件放进 `config/custom_components/hdl_link`，
 > 装完必须再做一次「添加集成」，否则不会出现实体。
 
 ### 方式 B：手动拷贝
 
-把 `custom_components/hdl_buspro/` 整个目录复制到 HA 的 `/config/custom_components/`，重启 HA。
+把 `custom_components/hdl_link/` 整个目录复制到 HA 的 `/config/custom_components/`，重启 HA。
 
 ### 安装后必做：释放 UDP 6000
 
 HDL 网关**只把应答回给绑定 6000 的那个客户端**。以下程序必须关掉，否则集成扫描不到设备：
 
-- `HDL Buspro Setup Tool` / `Buspro Studio`（会绑定 `本机IP:6000`，优先级比 `0.0.0.0:6000` 更高）
+- `HDL LINK Setup Tool` / `Buspro Studio`（会绑定 `本机IP:6000`，优先级比 `0.0.0.0:6000` 更高）
 - 旧的 MQTT 桥接脚本（`buspro_spec_bridge.py`）
 
 排查命令（Windows）：`Get-NetUDPEndpoint -LocalPort 6000`，正常应只有一条 `0.0.0.0 6000`。
@@ -63,17 +63,17 @@ HDL 网关**只把应答回给绑定 6000 的那个客户端**。以下程序必
 
 ## 3. 配置流程（三步）
 
-1. **连接 HDL 网关**：网关 IP（如 `192.168.1.150`）、UDP 端口 `6000`、扫描子网号（现场是 `10`）。
-   - 集成会自动广播扫描，把命中的设备列出来。
-   - 报错对照：`port_in_use` = 本机 6000 被占；`no_devices` = 子网号不对或总线没接；`cannot_connect` = IP/网络问题。
-2. **选择要接入的设备**：多选列表，显示形如 `10.100 · 3557 · 48 通道`、`10.3 · 1513 · 温湿照 · 27°C / 300lx`。
-   - 有通道的判为继电器/调光设备；只应答 `0x1605` 的判为传感器。
-3. **分配通道用途**（可留空）：格式 `设备地址/通道号`，逗号分隔。
-   - 调光通道 → `light`；窗帘通道 → `cover`；门铃设备地址 → `binary_sensor`。
-   - 例如：调光 `10.100/9, 10.100/10`，窗帘 `10.100/23, 10.100/24`，门铃 `10.3`。
+1. **发现 HDL LINK 网关**：打开集成后自动广播发现（UDP 6000 广播 + 本网段兜底扫描），把应答的网关列出来供选择；跨网段/广播被挡时选「手动输入网关 IP」。**不需要**用户填 IP 与子网号。
+   - 报错对照：`port_in_use` = 本机 6000 被占；`no_gateway` = 广播无应答（可手动输入）；`no_devices` = 网关在但总线上没有设备。
+2. **选择要接入的设备**：自动尝试常见总线子网（1 与 10），把命中的设备连同**读到的功能属性**列出来多选，形如
+   `10.100 · 48 通道继电器/调光主机 · 48 路通道`、`10.3 · 温湿度照度传感器 · 温湿照 · 当前 27°C / 31lx · 干接点/门铃`。
+3. **分配功能与场景**（可留空）：格式 `设备地址/通道号`，逗号分隔。
+   - 调光通道 → `light`；窗帘通道 → `cover`；门铃设备地址 → `binary_sensor`；场景号 → `button`（按下发 `0xE01C`）。
+   - 例如：调光 `10.100/9, 10.100/10`，窗帘 `10.100/23, 10.100/24`，门铃 `10.3`，场景 `1, 3, 5`。
    - 未填的通道一律作为 `switch`。
+   - **场景列表**：集成用 `0x000C` 读场景状态、`0x000D` 应答；网关未返回时（例如主机里没配场景），表单会提示"未读到"，此时按 HDL 场景号手填即可。
 
-配置后可在 **设置 → 设备与服务 → HDL Buspro → 选项** 里修改通道用途，保存即自动重载。
+配置后可在 **设置 → 设备与服务 → HDL LINK → 选项** 里修改通道用途，保存即自动重载。
 
 ---
 
@@ -82,7 +82,7 @@ HDL 网关**只把应答回给绑定 6000 的那个客户端**。以下程序必
 ### 4.1 无真机：协议级端到端（已跑通 11/11）
 
 ```powershell
-cd hdl_buspro-integration
+cd hdl_link-integration
 python -m tests.test_end_to_end
 ```
 
@@ -111,15 +111,15 @@ python tools\probe_real.py --host 192.168.1.150 --subnet 10 --channel 9 --source
 
 - 实体命名：`HDL 10.100` 下的 `通道1…通道48`；`HDL 10.3` 下的 `温度`、`照度`、`门铃`。
 - 开发者工具 → 状态，能看到 `switch.hdl_10_100_*`、`sensor.hdl_10_3_temperature`。
-- 日志：`设置 → 系统 → 日志`，筛选 `custom_components.hdl_buspro`。
+- 日志：`设置 → 系统 → 日志`，筛选 `custom_components.hdl_link`。
 
 ---
 
 ## 5. 代码地图（给后续维护/扩展的人）
 
 ```
-custom_components/hdl_buspro/
-├── manifest.json         domain=hdl_buspro, iot_class=local_push, requirements=[]
+custom_components/hdl_link/
+├── manifest.json         domain=hdl_link, iot_class=local_push, requirements=[]
 ├── const.py              配置键 / 轮询周期 / 设备种类
 ├── config_data.py        data 与 options 合并
 ├── protocol.py           报文格式、CRC、命令码、payload 编解码
@@ -155,9 +155,9 @@ custom_components/hdl_buspro/
 
 ---
 
-## 7. 与第三方 `ar_hdl_buspro` 的差异
+## 7. 与第三方 `ar_hdl_link` 的差异
 
-| 维度 | 第三方 ar_hdl_buspro v5.0.18 | 本集成 v1.0 |
+| 维度 | 第三方 ar_hdl_link v5.0.18 | 本集成 v1.0 |
 |---|---|---|
 | 授权 | 需要厂商 license，实测 `pending_approval` | 无授权校验 |
 | 体量 | ~450KB，含 151KB 目录表、135KB config_flow、41KB licensing | 约 30KB，纯标准库 |

@@ -1,4 +1,4 @@
-"""HDL Buspro 集成入口：一条总线一个网关连接，轮询通道状态 + 推送传感器。"""
+"""HDL LINK 集成入口：一条总线一个网关连接，轮询通道状态 + 推送传感器。"""
 
 from __future__ import annotations
 
@@ -26,12 +26,19 @@ from .const import (
     SIGNAL_UPDATE,
 )
 from .gateway import HdlGateway, HdlGatewayError
-from .protocol import SENDER_DEVICE, SENDER_SUBNET, SENDER_TYPE
+from .protocol import (
+    CMD_SCENE_CONTROL,
+    SENDER_DEVICE,
+    SENDER_SUBNET,
+    SENDER_TYPE,
+    build_scene_command,
+)
 
 LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
+    Platform.BUTTON,
     Platform.COVER,
     Platform.LIGHT,
     Platform.SENSOR,
@@ -65,6 +72,12 @@ class HdlRuntime:
             result = await self.gateway.async_read_sensor(address)
             if result is not None:
                 async_dispatcher_send(hass, f"{SIGNAL_UPDATE}_{address[0]}.{address[1]}")
+
+    async def async_run_scene(self, scene: int, subnet: int) -> None:
+        """触发 HDL 场景（0xE01C）。"""
+        await self.gateway.async_send(
+            CMD_SCENE_CONTROL, (subnet, 254), build_scene_command(scene)
+        )
 
     def stop_tasks(self) -> None:
         for task in self._tasks:
@@ -149,4 +162,4 @@ __all__ = ["async_setup_entry", "async_unload_entry", "async_reload_entry", "Hdl
 # 平台模块预热：HA 2025.7+ 会把「事件循环里 import 自定义集成平台模块」判为阻塞调用错误，
 # 使 async_forward_entry_setups 失败（表现为集成「设置失败」）。__init__ 本身是 HA 在
 # executor 中加载的，在这里预导入各平台后，后续 forward 直接命中 sys.modules，不再阻塞。
-from . import binary_sensor, cover, light, sensor, switch  # noqa: E402,F401
+from . import binary_sensor, button, cover, light, sensor, switch  # noqa: E402,F401

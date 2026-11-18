@@ -7,12 +7,12 @@ import types
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SKILL_PKG = ROOT / "custom_components" / "hdl_buspro"
+SKILL_PKG = ROOT / "custom_components" / "hdl_link"
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-if "hdl_buspro" not in sys.modules:
-    pkg = types.ModuleType("hdl_buspro")
+if "hdl_link" not in sys.modules:
+    pkg = types.ModuleType("hdl_link")
     pkg.__path__ = [str(SKILL_PKG)]  # type: ignore[attr-defined]
-    sys.modules["hdl_buspro"] = pkg
+    sys.modules["hdl_link"] = pkg
