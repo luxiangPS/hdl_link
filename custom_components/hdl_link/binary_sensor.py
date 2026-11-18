@@ -24,6 +24,15 @@ DEVICE_CLASS_MAP = {
     "problem": BinarySensorDeviceClass.PROBLEM,
 }
 
+TYPE_LABEL = {
+    "motion": "人体感应",
+    "door": "门磁",
+    "smoke": "烟感",
+    "gas": "燃气",
+    "moisture": "水浸",
+    "problem": "告警",
+}
+
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
@@ -47,7 +56,10 @@ class HdlBinarySensor(HdlEntity, BinarySensorEntity):
         spk = str(config.get("spk"))
         key, device_class = BINARY_SENSOR_KEYS[spk]
         self._key = key
-        self._attr_name = self.func_name
+        # 工程里没起名时用类型名（人体感应 / 门磁 …），避免和设备名重复
+        self._attr_name = (
+            str(config.get("name") or "").strip() or TYPE_LABEL.get(device_class, self.func_name)
+        )
         if device_class in DEVICE_CLASS_MAP:
             self._attr_device_class = DEVICE_CLASS_MAP[device_class]
 

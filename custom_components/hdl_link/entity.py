@@ -21,7 +21,13 @@ class HdlEntity(CoordinatorEntity[HdlCoordinator]):
         self.sid: str = str(config["sid"])
         self.spk: str = str(config.get("spk") or "")
         self.oid: str = str(config.get("oid") or "")
-        self.func_name: str = str(config.get("name") or self.sid)
+        raw_name = str(config.get("name") or "").strip()
+        if raw_name:
+            self.func_name = raw_name
+        else:
+            # 工程里没给功能起名时，用通道号生成可读名称，避免出现 48 位 sid
+            channel = channel_from_sid(self.sid)
+            self.func_name = f"通道 {channel:02d}" if channel is not None else self.sid
         self._attr_unique_id = f"{coordinator.gw_id}-{self.sid}-{key}"
         self._attr_name = None  # 用设备名 + 实体名组合
 
@@ -78,6 +84,16 @@ class HdlEntity(CoordinatorEntity[HdlCoordinator]):
         if not status:
             return
         await self.coordinator.async_write(self.sid, status)
+
+
+def channel_from_sid(sid: str) -> int | None:
+    """从功能 sid 里取出通道号：<oid:16><模块:4><通道:4><后缀:4>。"""
+    if len(sid) < 24:
+        return None
+    try:
+        return int(sid[20:24], 16)
+    except ValueError:
+        return None
 
 
 def numeric(raw: str | None) -> float | None:

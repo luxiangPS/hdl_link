@@ -24,6 +24,13 @@ DEVICE_CLASS_MAP = {
     "carbon_dioxide": SensorDeviceClass.CO2,
 }
 
+TYPE_LABEL = {
+    "temperature": "温度",
+    "humidity": "湿度",
+    "illuminance": "照度",
+    "carbon_dioxide": "CO2",
+}
+
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
@@ -48,7 +55,11 @@ class HdlSensor(HdlEntity, SensorEntity):
         spk = str(config.get("spk"))
         key, device_class, unit = SENSOR_KEYS[spk]
         self._key = key
-        self._attr_name = f"{self.func_name} {key}" if unit is None else self.func_name
+        raw = str(config.get("name") or "").strip()
+        if raw:
+            self._attr_name = f"{self.func_name} {key}" if unit is None else self.func_name
+        else:
+            self._attr_name = TYPE_LABEL.get(device_class, self.func_name)
         if device_class in DEVICE_CLASS_MAP:
             self._attr_device_class = DEVICE_CLASS_MAP[device_class]
         if unit:
