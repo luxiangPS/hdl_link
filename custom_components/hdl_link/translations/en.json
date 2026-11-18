@@ -2,10 +2,11 @@
   "config": {
     "step": {
       "user": {
-        "title": "Select an HDL gateway",
-        "description": "Found {count} HDL gateway(s) on this network. Pick the gateway to connect, or choose \"Enter gateway IP manually\" if nothing was found.",
+        "title": "Select HDL gateway",
+        "description": "{count} HDL gateway(s) found on this network (search uses a LAN broadcast).\nIf the list is empty, Home Assistant is usually on a different subnet than the gateway. Enter the gateway IP below (e.g. 192.168.1.150), or a subnet to probe (e.g. 192.168.1.0/24).",
         "data": {
-          "gateway": "Gateway"
+          "gateway": "Discovered gateways",
+          "manual_host": "Gateway IP or subnet (optional)"
         }
       },
       "manual": {
@@ -40,7 +41,9 @@
     "error": {
       "cannot_connect": "Cannot reach the gateway: check the IP, network reachability and that the gateway allows local connections.",
       "no_functions": "Connected, but no function was returned. Make sure the gateway project has devices configured.",
-      "no_selection": "Select at least one function."
+      "no_selection": "Select at least one function.",
+      "need_host": "Pick a gateway from the list, or fill in the gateway IP / subnet.",
+      "invalid_host": "Unrecognized address. Use an IP (e.g. 192.168.1.150) or a subnet (e.g. 192.168.1.0/24)."
     },
     "abort": {
       "already_configured": "This gateway is already configured."

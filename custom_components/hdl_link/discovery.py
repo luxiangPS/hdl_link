@@ -175,6 +175,31 @@ async def _tcp_scan(hosts: list[str], timeout: float, port: int) -> list[Gateway
     return results
 
 
+def expand_hosts(value: str) -> tuple[list[str], bool]:
+    """把 '192.168.1.150' / 'gw.local' / '192.168.1.0/24' 展开成待探测主机列表。
+
+    返回 (主机列表, 是否为网段)。网段超过 1024 个地址视为非法，避免误扫大网。
+    """
+    text = (value or "").strip()
+    if not text:
+        return [], False
+    if "/" in text:
+        try:
+            net = ipaddress.ip_network(text, strict=False)
+        except ValueError:
+            return [], True
+        if net.num_addresses > 1024:
+            return [], True
+        return [str(h) for h in net.hosts()], True
+    try:
+        ipaddress.ip_address(text)
+        return [text], False
+    except ValueError:
+        if re.match(r"^[A-Za-z0-9._-]{1,63}$", text):
+            return [text], False
+        return [], False
+
+
 async def async_scan(
     extra_hosts: list[str] | None = None,
     *,

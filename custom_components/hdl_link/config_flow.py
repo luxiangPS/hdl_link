@@ -30,7 +30,7 @@ from .const import (
     SPK_PLATFORM,
     SPK_PREFIX_PLATFORM,
 )
-from .discovery import async_scan
+from .discovery import async_scan, expand_hosts
 from .gateway import FunctionInfo, HdlGateway, GatewayInfo
 from .protocol import LinkError
 
@@ -84,29 +84,53 @@ class HdlLinkConfigFlow(ConfigFlow, domain=DOMAIN):
         self._scenes: list[dict[str, Any]] = []
         self._selected: list[str] = []
         self._local_secret: str = ""
+        self._found: list[GatewayInfo] | None = None
 
     # ---------------------------------------------------------------- 第 1 步
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """搜索网关；搜不到时可直接填网关 IP 或网段（跨网段部署靠这一步）。"""
         errors: dict[str, str] = {}
+        manual_value = ""
 
         if user_input is not None:
-            host = user_input.get("gateway") or ""
-            if host == MANUAL_HOST:
-                return await self.async_step_manual()
-            try:
-                self._info, self._functions, self._scenes = await async_load_gateway(host)
-            except LinkError as err:
-                LOGGER.warning("连接 %s 失败: %s", host, err)
-                errors["base"] = "cannot_connect"
-            else:
-                self._async_check_duplicate(self._info)
-                if not self._functions:
-                    errors["base"] = "no_functions"
+            manual_value = str(user_input.get("manual_host") or "").strip()
+            host = ""
+            if manual_value:
+                hosts, is_range = expand_hosts(manual_value)
+                if not hosts:
+                    errors["base"] = "invalid_host"
+                elif is_range:
+                    found = await async_scan(hosts, timeout=20)
+                    if found:
+                        host = found[0].host
+                        self._found = found
+                    else:
+                        errors["base"] = "cannot_connect"
                 else:
-                    return await self.async_step_entities()
-            found = await async_scan([host])
-        else:
-            found = await async_scan([])
+                    host = hosts[0]
+            else:
+                picked = str(user_input.get("gateway") or "")
+                if not picked or picked == MANUAL_HOST:
+                    errors["base"] = "need_host"
+                else:
+                    host = picked
+
+            if not errors and host:
+                try:
+                    self._info, self._functions, self._scenes = await async_load_gateway(host)
+                except LinkError as err:
+                    LOGGER.warning("连接 %s 失败: %s", host, err)
+                    errors["base"] = "cannot_connect"
+                else:
+                    self._async_check_duplicate(self._info)
+                    if not self._functions:
+                        errors["base"] = "no_functions"
+                    else:
+                        return await self.async_step_entities()
+
+        if self._found is None:
+            self._found = await async_scan([])
+        found = self._found
 
         options = [
             selector.SelectOptionDict(
@@ -115,20 +139,27 @@ class HdlLinkConfigFlow(ConfigFlow, domain=DOMAIN):
             )
             for g in found
         ]
-        options.append(selector.SelectOptionDict(value=MANUAL_HOST, label="手动输入网关 IP"))
+        options.append(selector.SelectOptionDict(value=MANUAL_HOST, label="手动输入网关 IP / 网段"))
 
         schema = vol.Schema(
             {
                 vol.Required(
                     "gateway",
-                    default=options[0]["value"] if options else MANUAL_HOST,
+                    default=options[0]["value"] if found else MANUAL_HOST,
                 ): selector.SelectSelector(
                     selector.SelectSelectorConfig(options=options, mode=selector.SelectSelectorMode.DROPDOWN)
-                )
+                ),
+                vol.Optional("manual_host", default=manual_value): selector.TextSelector(
+                    selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
+                ),
             }
         )
-        return self.async_show_form(step_id="user", data_schema=schema, errors=errors,
-                                    description_placeholders={"count": str(len(found))})
+        return self.async_show_form(
+            step_id="user",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders={"count": str(len(found))},
+        )
 
     # ---------------------------------------------------------------- 手动 IP
     async def async_step_manual(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:

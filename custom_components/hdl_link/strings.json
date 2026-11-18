@@ -3,14 +3,15 @@
     "step": {
       "user": {
         "title": "选择 HDL 网关",
-        "description": "已在当前网络中发现 {count} 台 HDL 网关。选择要接入的网关；若未发现，请选「手动输入网关 IP」。",
+        "description": "已在当前网络中发现 {count} 台 HDL 网关（自动搜索走局域网广播）。\n如果列表为空，通常是 Home Assistant 与网关不在同一网段（例如 HA 跑在虚拟机的 NAT 网段）。此时请在下方直接填写网关 IP，例如 192.168.1.150；也可以填网段让集成逐个探测，例如 192.168.1.0/24。",
         "data": {
-          "gateway": "网关"
+          "gateway": "发现到的网关",
+          "manual_host": "网关 IP 或网段（可选）"
         }
       },
       "manual": {
         "title": "手动输入网关 IP",
-        "description": "输入 HDL 主网关（MGWIP / LINK 网关）的局域网 IP。集成会从网关读取功能清单与场景清单并列出可选条目。",
+        "description": "输入 HDL 主网关（MGWIP / LINK 网关）的局域网 IP，集成会从网关读取功能清单与场景清单。",
         "data": {
           "host": "网关 IP"
         }
@@ -40,7 +41,9 @@
     "error": {
       "cannot_connect": "无法连接该网关：请确认 IP 正确、网络互通并允许本地连接。",
       "no_functions": "已连上网关，但网关内没有读到任何功能。请确认网关工程已配置设备功能。",
-      "no_selection": "请至少勾选一个功能。"
+      "no_selection": "请至少勾选一个功能。",
+      "need_host": "请从列表选择一台网关，或在「网关 IP 或网段」里填写地址。",
+      "invalid_host": "填写的地址无法识别，请填 IP（如 192.168.1.150）或网段（如 192.168.1.0/24）。"
     },
     "abort": {
       "already_configured": "该网关已经完成接入。"
