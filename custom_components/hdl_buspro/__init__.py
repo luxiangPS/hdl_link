@@ -145,3 +145,8 @@ async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 __all__ = ["async_setup_entry", "async_unload_entry", "async_reload_entry", "HdlRuntime",
            "SENDER_SUBNET", "SENDER_DEVICE", "SENDER_TYPE", "CONF_CHANNELS", "HdlGatewayError"]
+
+# 平台模块预热：HA 2025.7+ 会把「事件循环里 import 自定义集成平台模块」判为阻塞调用错误，
+# 使 async_forward_entry_setups 失败（表现为集成「设置失败」）。__init__ 本身是 HA 在
+# executor 中加载的，在这里预导入各平台后，后续 forward 直接命中 sys.modules，不再阻塞。
+from . import binary_sensor, cover, light, sensor, switch  # noqa: E402,F401
