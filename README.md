@@ -1,140 +1,123 @@
 # HDL LINK for Home Assistant（HDL 官方版）
 
-HDL（河东科技）自研的 Home Assistant 集成，通过 HDL 官方 **Link 协议**直连 HDL 主网关
-（MGWIP / LINK 网关，如 MGWIP.430），**不依赖 MQTT、不依赖第三方库、不改设备固件、不占用 UDP 6000**。
+HDL（河东科技）官方推出的 Home Assistant 集成：把 HDL 主网关下的照明、开关、传感器、
+窗帘与场景接入 Home Assistant，与 HA 自动化、面板、语音助手一起使用。
 
-- 支持从 GitHub 仓库直接添加（HACS「自定义存储库」/ Home Assistant「Marketplace」）
-- 支持直接把 `custom_components/hdl_link` 拷进 HA 的 `config/custom_components/`
-- 网关能力来源是**读取网关内部工程数据**（功能清单 + 场景清单），不是靠扫描设备猜类型
+- **零配置门槛**：向导内自动搜索局域网内的 HDL 网关，选中即接入，无需填写总线地址
+- **能力来自网关自身**：列出的是网关工程里真实存在的功能与场景，按名称/类型勾选即可
+- **纯本地运行**：不依赖云端、不依赖 MQTT、不修改网关与设备固件
+- **官方维护**：由 HDL 广州技术团队维护，随 HA 版本更新
+
+支持安装方式：
+
+- Home Assistant「Marketplace」（或 HACS「自定义存储库」）从本仓库安装
+- 手动把 `custom_components/hdl_link` 拷入 HA 的 `config/custom_components/`
 
 ---
 
-## 1. 工作原理
+## 1. 支持的设备类型
 
-| 层 | 文件 | 作用 |
+| 设备类型 | HA 平台 | 说明 |
 |---|---|---|
-| 协议层 | `protocol.py` | Link 报文封装与解析（`Topic` + `Length` + JSON 载荷），TCP 长连接、报文编号匹配、断线重连 |
-| 网关层 | `gateway.py` | 搜索网关、读物理模块/功能/场景/房间、批量读属性、下发属性、执行场景 |
-| 发现层 | `discovery.py` | 扫描本机各 IPv4 网段的 254 个地址并发探测，自动列出可接入网关 |
-| 数据层 | `coordinator.py` | 单连接批量轮询（默认 10 秒，可调），控制后立即回读 |
-| 平台层 | `light/switch/sensor/binary_sensor/cover/button.py` | 按 SPK 物模型映射为 HA 实体 |
+| 开关灯 | `light` | 开 / 关 |
+| 调光灯 | `light` | 开 / 关 + 亮度（0–100%） |
+| 色温灯 / RGB / RGBW 灯 | `light` | 当前按可调光接入（色温与颜色控制见「已知边界」） |
+| 插座 / 通用继电器触点 | `switch` | 开 / 关 |
+| 温度 | `sensor` | ℃ |
+| 湿度 | `sensor` | %RH（网关配置了湿度传感器时出现） |
+| 照度 | `sensor` | lx |
+| CO₂ / PM2.5 / TVOC | `sensor` | ppm / µg/m³ |
+| 人体感应 | `binary_sensor` | 有人 / 无人 |
+| 门磁 / 烟雾 / 燃气 / 水浸 / 紧急求助 / 干接点 | `binary_sensor` | 报警 / 正常 |
+| 百叶帘 / 卷帘 / 开合帘 / 开关停窗帘 | `cover` | 开 / 关 / 停 / 位置百分比 |
+| 网关场景 | `button` | 每场景一个按钮，按下即执行 |
 
-要点：
-
-1. **连接**：一个配置条目 = 一台主网关，一条 TCP 长连接（默认 8586），心跳保活。
-2. **发现**：配置向导进来就自动搜网，用户只需在列表里选网关；搜不到时才手动填 IP。
-3. **能力**：配置向导连接网关后调用网关内的功能清单接口，把每个功能的 `名称 / 类型(SPK)` 列给用户勾选。
-4. **状态**：批量属性读取（一次最多 40 个功能），轮询周期可调。
-5. **控制**：属性下发报文，网关确认后集成立刻回读一次，UI 状态跟手。
-
----
-
-## 2. 支持的类型（当前版本）
-
-| SPK | HA 平台 | 实体说明 |
-|---|---|---|
-| `light.switch` | light | 开关灯（开 / 关） |
-| `light.dimming` | light | 调光灯（开关 + 亮度，网关 `current` 0~1 映射 0~255） |
-| `light.cct` / `light.rgb` / `light.rgbw` | light | 目前按可调光接入（色温/颜色键未在文档固定，后续版本补） |
-| `panel.socket` / `other.common` | switch | 插座 / 通用继电器触点 |
-| `sensor.temperature` | sensor | 温度（℃，属性 `temperature`） |
-| `sensor.humidity` | sensor | 湿度（%） |
-| `sensor.light` | sensor | 照度（lx，属性 `illuminance`） |
-| `sensor.co2` / `sensor.pm25` / `sensor.tvoc` | sensor | CO₂ / PM2.5 / TVOC |
-| `sensor.pir` | binary_sensor | 人体感应（`people_status`） |
-| `sensor.doorwindow` / `smoke` / `gas` / `water` / `help` / `dryContact` | binary_sensor | 门磁 / 烟雾 / 燃气 / 水浸 / 求助 / 干接点 |
-| `curtain.shades` / `roller` / `trietex` / `switch` | cover | 窗帘（位置百分比自适应 `position`/`percent`，未验证的类型需现场确认） |
-| 网关内场景 | button | 每个场景一个按钮，按一下即执行 |
-
-> 类型映射在 `const.py` 的 `SPK_PLATFORM` / `SENSOR_KEYS` / `BINARY_SENSOR_KEYS` 里集中维护，新增类型只改这张表 + 对应平台文件。
+> 只接入网关工程里实际存在的功能；某类设备在工程里没有，列表里就不会出现。
 
 ---
 
-## 3. 安装
+## 2. 安装
 
-### 方式 A：按仓库添加（推荐，可更新）
+### 方式 A：Marketplace / HACS（推荐，可在线更新）
 
-1. HACS → 集成 → 右上角「自定义存储库」→ 添加 `https://github.com/luxiangPS/hdl_link`，类型选「集成」。
-2. 在列表里找到 **HDL LINK** → 下载 → 重启 Home Assistant。
-3. 设置 → 设备与服务 → 添加集成 → 搜 **HDL LINK** → 按第 4 节走配置向导。
+1. 打开 **设置 → 加载项与市场（Marketplace）**，搜索并添加 `https://github.com/luxiangPS/hdl_link`（HACS 则在「集成 → 自定义存储库」中添加同一地址）。
+2. 在市场中找到 **HDL LINK** → 安装 → 重启 Home Assistant。
+3. **设置 → 设备与服务 → 添加集成 → 搜索 HDL LINK**。
 
 ### 方式 B：手动拷贝
 
 ```bash
-# 把 custom_components/hdl_link 整个目录拷到 HA 配置目录下
 cp -r custom_components/hdl_link /config/custom_components/
-# 重启
 ha core restart
 ```
 
 ---
 
-## 4. 配置向导（4 步）
+## 3. 配置向导
 
 1. **选择 HDL 网关**
-   向导会自动扫描当前网络，下拉列表里出现形如 `MGWIP.430 · 192.168.1.150 · MGWIP.430` 的条目；
-   找不到就选「手动输入网关 IP」，下一步填 IP。
-   *（不需要填写总线子网号 —— 子网是 Buspro 的概念，Link 协议用功能 sid 直接寻址。）*
-
+   向导会自动在局域网内搜索 HDL 网关，下拉列表显示形如 `MGWIP.430 · 192.168.1.150` 的条目，
+   选中后点「提交」。若网络环境屏蔽了广播或跨网段，选「手动输入网关 IP」并填写网关地址。
 2. **选择要接入的功能**
-   列表来自网关内的功能清单，每项显示 `[类型] 功能名称（类型说明）`，例如
-   `[照明] Ulaz hodnik ugradna（开关灯）`。
-   默认全选可直接接入的类型；不支持的类型不会出现在列表里（页面上会显示「x 个类型暂不支持」）。
+   列表来自网关工程，每项形如 `[照明] 走廊筒灯（开关灯）`。默认全选可接入项；
+   页面上会显示「共 N 个功能，M 个可接入，K 个类型暂不支持」。
+3. **本地加密密钥（可选）**
+   网关若启用了本地加密上报，填写部署方提供的 16 位本地密钥即可获得实时状态推送；
+   **留空也完全可用**，此时按轮询周期读取状态。
+4. **选择场景（可跳过）**
+   勾选后每个场景生成一个按钮实体，点一下即在网关内执行。
 
-3. **选择场景**（可跳过）
-   列出网关内的场景（如「回家走廊灯」），勾选后生成按钮实体。
-
-4. **完成**
-   生成 1 个网关设备 + N 个物理模块设备（按 oid 分组）+ 各功能实体。
-
-> 想调整轮询周期：集成页面 → 配置（选项）→ 轮询周期（3~120 秒）。
+完成后会生成：1 个网关设备 + 若干物理模块设备 + 各功能实体（开关、传感器、场景按钮等）。
 
 ---
 
-## 5. 在前端验证
+## 4. 日常使用与设置
 
-- 设置 → 设备与服务 → **HDL LINK** → 设备：应看到网关与各物理模块（型号、固件版本来自网关工程）。
-- 实体页按「照明 / 开关 / 数值传感器 / 二元传感器 / 场景」分组显示。
-- 开关/照明点一下，现场继电器应立即动作，实体状态在 1 秒内回读一致。
+- **设备页**：设置 → 设备与服务 → HDL LINK → 设备，可见网关与下属物理模块（型号、固件版本取自网关）。
+- **实体页**：按「照明 / 开关 / 数值传感器 / 二元传感器 / 窗帘 / 场景」分组。
+- **调整轮询周期**：集成卡片 → 配置（选项）→ 轮询周期 3–120 秒；也可在同一页更新本地加密密钥（启用实时上报后可将轮询调长，降低总线负载）。
 
 ---
 
-## 6. 现场自检（不需要 Home Assistant）
+## 5. 现场自检脚本（可选，不需要 Home Assistant）
 
-在任意装有 Python 的设备上（与网关同网段，或网络可达）：
+在任意装有 Python 3.9+ 的电脑上（与网关网络可达）：
 
 ```bash
 python tools/live_check.py 192.168.1.150
 ```
 
-脚本会依次验证：搜索网关 → 读功能清单 → 读场景 → 批量读状态 → 选一路灯下发并回读、再恢复原状态。
-
-实测输出（MGWIP.430，192.168.1.150）：
-
-```
-== 1. LINK 广播搜索 ==   oid=010105003DF6F100  gatewayId=2109921361567219716
-== 2. 功能清单 ==       53 个：light.switch×48、other.common×2、sensor.pir/temperature/light 各 1
-== 3. 场景列表 ==       回家走廊灯
-== 4. 批量读取 ==       已读到 53/53 个功能的状态
-== 5. 控制验证 ==       on_off on -> off，网关确认 True，回读 off，恢复 on，最终回读 on
-```
+脚本按顺序检查：连接网关 → 读取功能清单 → 读取场景 → 批量读取状态 → 选一路灯下发并回读、再恢复原状态。
+输出会逐项打印 `OK` / `FAIL`，便于现场判断是网络、权限还是工程配置问题。
 
 ---
 
-## 7. 最小系统要求
+## 6. 系统要求
 
-- HDL 主网关（LINK 网关）固件需支持 Link 本地协议（本版本实测 `LD_MGWIP.430_V03.11.19_260626_RK3308_LINK`）
-- 网关与 HA 之间网络可达（TCP 8586；同网段最稳，跨网段需保证路由/端口放通）
-- Home Assistant 2024.6.0 以上（当前实测 2026.11.2）
+- HDL 主网关（LINK 网关，如 MGWIP 系列），固件支持本地接入
+- 网关与 Home Assistant 网络可达（同网段最稳；跨网段需保证路由与端口放通）
+- Home Assistant 2024.6.0 或更高
 
 ---
 
-## 8. 已知边界
+## 7. 已知边界
 
-- 网关主动上报的属性推送在本地是**加密载荷**，本集成不解析，统一用批量轮询取状态（因此是 `local_polling`，不是 `local_push`）。
-- 色温 / 颜色控制尚未开放（属性键未在 HDL 文档中固定，避免做出假能力）。
-- 窗帘类型已实现但现场键名需按项目确认。
-- 房间信息（`room/list/get`）已能读，暂未用于自动分区。
+- 色温与颜色控制尚未开放（不同固件下键名不一致，避免做出宣称但不可用的能力）。
+- 窗帘位置百分比按项目实测键名自适应，个别型号需现场核对。
+- 湿度实体仅在网关工程里存在湿度传感器时出现。
+- 房间信息可读取，但暂未用于自动分区。
+
+---
+
+## 8. 排障
+
+| 现象 | 处理 |
+|---|---|
+| 向导第 1 步列表为空 / 「发现 0 台」 | 网关与 HA 不同网段或广播被屏蔽：改用「手动输入网关 IP」；确认 HA 与网关路由互通 |
+| 提交时报「无法连接该网关」 | 检查 IP 是否正确、网关是否在线、防火墙是否放通集成的通信端口 |
+| 功能列表为空 | 网关工程里没有配置设备功能，先用调试软件确认工程已下发 |
+| 实体显示「不可用」 | 网关离线或网络中断；恢复后集成会自动重连并刷新 |
+| 操作后状态更新慢 | 未填本地密钥时为轮询刷新：把轮询周期调小，或填写部署方提供的本地密钥启用实时上报 |
 
 ---
 
@@ -142,16 +125,23 @@ python tools/live_check.py 192.168.1.150
 
 ```
 custom_components/hdl_link/
-  __init__.py      集成入口（连接、平台加载、心跳）
-  protocol.py      Link 报文编解码 + TCP 客户端
-  gateway.py       网关操作集合
-  discovery.py     网段扫描发现
-  coordinator.py   轮询协调器
-  config_flow.py   配置向导（选网关 → 选功能 → 选场景）
+  __init__.py      集成入口（连接、平台加载、保活）
+  protocol.py      通信层（帧编解码、长连接、重连）
+  gateway.py       网关操作集合（发现、读工程、读写属性、执行场景）
+  discovery.py     网关本地搜索（局域网广播）
+  coordinator.py   状态协调器（上报 + 轮询）
+  config_flow.py   配置向导（选网关 → 选功能 → 密钥 → 选场景）
   entity.py        实体基类
-  light/switch/sensor/binary_sensor/cover/button.py
-  const.py         主题、类型映射、属性键
-  brand/           品牌图标（icon/logo/dark_logo）
+  light / switch / sensor / binary_sensor / cover / button
+  const.py         类型映射与属性键
+  brand/           品牌图标
   translations/    zh-Hans / en
-tools/live_check.py  现场自检脚本
+tools/live_check.py 现场自检脚本
 ```
+
+---
+
+## 10. 支持
+
+- 问题与需求：本仓库 Issues
+- 版本记录见 Releases / 提交历史

@@ -26,10 +26,9 @@ _UP_SUFFIX = "/thing/property/up"
 
 
 def decrypt_up_frame(raw: bytes, secret: str) -> dict[str, Any] | None:
-    """解开网关的本地加密上报帧（AES-128-CBC，key=iv=localSecret，整帧密文）。
+    """解开网关的本地加密上报帧（AES-128-CBC，key=iv=本地密钥，整帧密文）。
 
-    secret 即网关 /hdlFamily/config/localSecret.sys 的 16 位内容。
-    失败时返回 None，由调用方回退到轮询值。
+    secret 由部署方在配置向导中提供（16 位）。失败时返回 None，由调用方回退到轮询值。
     """
     try:
         from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -180,7 +179,7 @@ class LinkClient:
             body = None
 
         if body is None:
-            # 网关主动上报为本地加密二进制，用 localSecret 解密后再当明文处理
+            # 网关主动上报为本地加密二进制，用配置的本地密钥解密后再当明文处理
             if topic.endswith(_UP_SUFFIX) and self.local_secret:
                 body = decrypt_up_frame(raw, self.local_secret)
                 if body is None:
@@ -188,7 +187,7 @@ class LinkClient:
                     return
             else:
                 if topic.endswith(_UP_SUFFIX):
-                    LOGGER.debug("收到加密上报但未配置 localSecret，跳过")
+                    LOGGER.debug("收到加密上报但未配置本地密钥，跳过")
                 return
 
         msg_id = body.get("id")

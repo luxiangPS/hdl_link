@@ -17,9 +17,10 @@ CONF_GW_NAME: Final = "gw_name"
 CONF_ENTITIES: Final = "entities"    # [{"sid","spk","oid","name"}]
 CONF_SCENES: Final = "scenes"        # [{"sid","name"}]
 CONF_POLL_INTERVAL: Final = "poll_interval"
-CONF_LOCAL_SECRET: Final = "local_secret"   # 网关 /hdlFamily/config/localSecret.sys（可选，开启实时上报）
+CONF_LOCAL_SECRET: Final = "local_secret"   # 可选：网关本地加密密钥，用于解析实时上报
 
 DEFAULT_PORT: Final = 8586
+UDP_SEARCH_PORT: Final = 8585           # 本地搜索（广播）端口
 DEFAULT_POLL_INTERVAL: Final = 10      # 秒，属性轮询周期
 MIN_POLL_INTERVAL: Final = 3
 MAX_POLL_INTERVAL: Final = 120

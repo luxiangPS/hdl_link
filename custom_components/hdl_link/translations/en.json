@@ -10,7 +10,7 @@
       },
       "manual": {
         "title": "Enter gateway IP manually",
-        "description": "Enter the LAN IP of the HDL main gateway (MGWIP / LINK gateway). The integration reads the function and scene lists from the gateway itself, so no bus subnet number is required.",
+        "description": "Enter the LAN IP of the HDL main gateway (MGWIP / LINK gateway). The integration reads the function and scene lists from the gateway and lists what can be added.",
         "data": {
           "host": "Gateway IP"
         }
@@ -24,9 +24,9 @@
       },
       "secret": {
         "title": "Local encryption key (optional)",
-        "description": "The gateway pushes property updates as local-encrypted payloads. Paste the 16-character content of /hdlFamily/config/localSecret.sys to decode them in real time. Leave empty to rely on polling only; control and state still work.",
+        "description": "The gateway pushes property updates as locally encrypted payloads. Enter the 16-character local key supplied by the installer to decode them in real time. Leave it empty to rely on polling only; control and state still work.",
         "data": {
-          "local_secret": "localSecret (16 chars)"
+          "local_secret": "Local encryption key (16 chars)"
         }
       },
       "scenes": {
@@ -53,7 +53,7 @@
         "description": "Gateway {host}: adjust the polling interval, or set the local encryption key to enable live push updates.",
         "data": {
           "poll_interval": "Poll interval",
-          "local_secret": "localSecret (16 chars, optional)"
+          "local_secret": "Local encryption key (16 chars, optional)"
         }
       }
     }

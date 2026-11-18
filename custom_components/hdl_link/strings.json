@@ -10,7 +10,7 @@
       },
       "manual": {
         "title": "手动输入网关 IP",
-        "description": "输入 HDL 主网关（MGWIP/LINK 网关）的局域网 IP。集成会用 LINK 协议读取网关内部的设备功能与场景清单，不需要填写总线子网号。",
+        "description": "输入 HDL 主网关（MGWIP / LINK 网关）的局域网 IP。集成会从网关读取功能清单与场景清单并列出可选条目。",
         "data": {
           "host": "网关 IP"
         }
@@ -24,9 +24,9 @@
       },
       "secret": {
         "title": "本地加密密钥（可选）",
-        "description": "网关的主动状态上报是本地加密的。填入网关 /hdlFamily/config/localSecret.sys 的 16 位内容后，集成可实时解析上报；留空则只按轮询周期取状态（功能不受影响）。",
+        "description": "网关的状态上报为本地加密载荷。填入部署方提供的 16 位本地密钥后，集成可实时解析上报；留空则只按轮询周期取状态，控制与读取不受影响。",
         "data": {
-          "local_secret": "localSecret（16 位）"
+          "local_secret": "本地加密密钥（16 位）"
         }
       },
       "scenes": {
@@ -50,10 +50,10 @@
     "step": {
       "init": {
         "title": "HDL LINK 选项",
-        "description": "网关 {host}：可调整状态轮询周期，或填写本地加密密钥以启用实时上报。",
+        "description": "网关 {host}：可调整状态轮询周期，或设置本地加密密钥以启用实时上报。",
         "data": {
           "poll_interval": "轮询周期",
-          "local_secret": "localSecret（16 位，可留空）"
+          "local_secret": "本地加密密钥（16 位，可留空）"
         }
       }
     }
