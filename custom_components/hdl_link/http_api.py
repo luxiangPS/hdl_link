@@ -42,7 +42,8 @@ class HdlScanView(HomeAssistantView):
             result = await async_scan(hass)
         except Exception as err:  # noqa: BLE001
             LOGGER.exception("扫描失败")
-            return self.json_message(f"扫描失败: {err}", status_code=500)
+            detail = f"{type(err).__name__}: {err}"
+            return self.json({"error": detail}, status_code=500)
         return self.json(result)
 
 
@@ -74,7 +75,7 @@ class HdlProvisionView(HomeAssistantView):
             result = await async_provision(hass, coordinator, {"devices": devices}, dry_run=dry_run)
         except Exception as err:  # noqa: BLE001
             LOGGER.exception("写入网关失败")
-            return self.json_message(f"写入网关失败: {err}", status_code=500)
+            return self.json({"error": f"{type(err).__name__}: {err}"}, status_code=500)
         return self.json(result)
 
 

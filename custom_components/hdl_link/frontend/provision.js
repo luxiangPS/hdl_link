@@ -50,11 +50,35 @@ class HdlLinkProvision extends HTMLElement {
     }
   }
 
+  async _req(method, path, body) {
+    const hass = this._hass;
+    const tok = hass && hass.auth && hass.auth.data ? hass.auth.data.access_token : null;
+    if (tok) {
+      const res = await fetch(`/api/${path}`, {
+        method,
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${tok}` },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const text = await res.text();
+      let data = null;
+      try {
+        data = text ? JSON.parse(text) : null;
+      } catch (e) {
+        data = { error: text };
+      }
+      if (!res.ok) {
+        throw new Error((data && (data.error || data.message)) || `HTTP ${res.status}`);
+      }
+      return data || {};
+    }
+    return hass.callApi(method, path, body);
+  }
+
   async _load() {
     this._busy = true;
     this._render();
     try {
-      const data = await this._hass.callApi("GET", "hdl_link/scan");
+      const data = await this._req("GET", "hdl_link/scan");
       this._scan = data;
     } catch (err) {
       this._scan = { error: String(err && err.message ? err.message : err) };
@@ -115,7 +139,7 @@ class HdlLinkProvision extends HTMLElement {
     this._busy = true;
     this._render();
     try {
-      const res = await this._hass.callApi("POST", "hdl_link/provision", {
+      const res = await this._req("POST", "hdl_link/provision", {
         devices,
         dry_run: dryRun,
       });

@@ -93,6 +93,40 @@ def suggest_spk(domain: str, device_class: str | None, capability: list[str]) ->
     return ""
 
 
+def _entries_for_device(ent_reg: Any, device_id: str) -> list[Any]:
+    """兼容不同 HA 版本：模块级函数 / 注册表方法。"""
+    fn = getattr(er, "async_entries_for_device", None)
+    if fn is not None:
+        try:
+            return fn(ent_reg, device_id, include_disabled_entities=False)
+        except TypeError:
+            return fn(ent_reg, device_id)
+    method = getattr(ent_reg, "async_entries_for_device", None)
+    if method is not None:
+        try:
+            return method(device_id, include_disabled_entities=False)
+        except TypeError:
+            return method(device_id)
+    return []
+
+
+def _area_name(area_reg: Any, area_id: str | None) -> str:
+    """取区域名，兼容两种访问方式。"""
+    if not area_id:
+        return ""
+    for target in (area_reg, ar):
+        fn = getattr(target, "async_get_area", None)
+        if fn is None:
+            continue
+        try:
+            area = fn(area_id)
+        except TypeError:
+            continue
+        if area is not None:
+            return getattr(area, "name", "") or ""
+    return ""
+
+
 def _entity_row(
     hass: HomeAssistant,
     entity_entry: er.RegistryEntry,
@@ -104,8 +138,10 @@ def _entity_row(
         return None
 
     state = hass.states.get(entity_id)
-    device_class = entity_entry.device_class or (
-        (state.attributes or {}).get("device_class") if state else None
+    device_class = (
+        getattr(entity_entry, "device_class", None)
+        or getattr(entity_entry, "original_device_class", None)
+        or ((state.attributes or {}).get("device_class") if state else None)
     )
     unit = (state.attributes or {}).get("unit_of_measurement") if state else None
 
@@ -158,10 +194,12 @@ async def async_scan(hass: HomeAssistant) -> dict[str, Any]:
         if device.disabled:
             continue
 
-        entries = ent_reg.async_entries_for_device(
-            ent_reg, device.id, include_disabled_entities=False
-        )
-        rows = [row for row in (_entity_row(hass, e) for e in entries) if row]
+        try:
+            entries = _entries_for_device(ent_reg, device.id)
+            rows = [row for row in (_entity_row(hass, e) for e in entries) if row]
+        except Exception as err:  # noqa: BLE001 - 单台设备异常不影响整体扫描
+            LOGGER.warning("扫描设备 %s 失败: %s", device.id, err)
+            continue
         if not rows:
             continue
 
@@ -169,13 +207,15 @@ async def async_scan(hass: HomeAssistant) -> dict[str, Any]:
         rows.sort(key=lambda r: (SCAN_DOMAINS.index(r["domain"]) if r["domain"] in SCAN_DOMAINS else 99,
                                  r["name"]))
 
-        area = area_reg.async_get_area(device.area_id) if device.area_id else None
         integration = ""
-        for entry_id in device.config_entries:
-            entry = hass.config_entries.async_get_entry(entry_id)
-            if entry is not None:
-                integration = entry.title or entry.domain
-                break
+        try:
+            for entry_id in device.config_entries:
+                entry = hass.config_entries.async_get_entry(entry_id)
+                if entry is not None:
+                    integration = entry.title or entry.domain
+                    break
+        except Exception:  # noqa: BLE001
+            integration = ""
 
         devices.append(
             {
@@ -183,7 +223,7 @@ async def async_scan(hass: HomeAssistant) -> dict[str, Any]:
                 "name": device.name_by_user or device.name or device.id,
                 "model": device.model or "",
                 "manufacturer": device.manufacturer or "",
-                "area": area.name if area else "",
+                "area": _area_name(area_reg, device.area_id),
                 "integration": integration,
                 "functions": rows,
             }
