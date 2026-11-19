@@ -87,6 +87,9 @@ function stateTone(fn) {
   return "value";
 }
 
+/** 面板本地偏好（收起状态 / 手动移除的不可用功能）存这里 */
+const PREFS_KEY = "hdl_link_panel_prefs_v1";
+
 class HdlLinkProvision extends HTMLElement {
   constructor() {
     super();
@@ -101,6 +104,36 @@ class HdlLinkProvision extends HTMLElement {
     this._dryRun = true;
     this._checked = new Map(); // entity_id -> spk
     this._renderQueued = false;
+    // 面板本地偏好：收起的设备、被手动移除的不可用功能（只影响展示，不写入网关）
+    this._collapsed = new Set();
+    this._removed = new Set();
+    this._restorePrefs();
+  }
+
+  _restorePrefs() {
+    try {
+      const raw = window.localStorage.getItem(PREFS_KEY);
+      const prefs = raw ? JSON.parse(raw) : {};
+      if (Array.isArray(prefs.collapsed)) this._collapsed = new Set(prefs.collapsed);
+      if (Array.isArray(prefs.removed)) this._removed = new Set(prefs.removed);
+    } catch (err) {
+      this._collapsed = new Set();
+      this._removed = new Set();
+    }
+  }
+
+  _savePrefs() {
+    try {
+      window.localStorage.setItem(
+        PREFS_KEY,
+        JSON.stringify({
+          collapsed: Array.from(this._collapsed),
+          removed: Array.from(this._removed),
+        })
+      );
+    } catch (err) {
+      /* localStorage 不可用时忽略，不影响功能 */
+    }
   }
 
   set hass(hass) {
@@ -170,6 +203,7 @@ class HdlLinkProvision extends HTMLElement {
       const data = await this._req("GET", "hdl_link/scan");
       this._scan = data && Array.isArray(data.devices) ? data : { devices: [], error: "返回结构异常" };
       this._pruneSelection();
+      this._pruneRemoved();
     } catch (err) {
       this._scan = { devices: [], error: String(err && err.message ? err.message : err) };
     }
@@ -193,21 +227,49 @@ class HdlLinkProvision extends HTMLElement {
     return scan && Array.isArray(scan.devices) ? scan.devices : [];
   }
 
+  /** 扫描结果变了以后，丢掉已经不存在的「已移除」记录，避免恢复计数虚高 */
+  _pruneRemoved() {
+    if (!this._removed.size) return;
+    const alive = new Set();
+    for (const d of this._devices()) {
+      for (const f of d.functions || []) alive.add(f.entity_id);
+    }
+    const kept = [...this._removed].filter((id) => alive.has(id));
+    if (kept.length !== this._removed.size) {
+      this._removed = new Set(kept);
+      this._savePrefs();
+    }
+  }
+
   _visibleDevices() {
-    const q = this._query.trim().toLowerCase();
     return this._devices().filter((d) => {
       if (!this._showSystem && d.is_system) {
         // 系统实体默认隐藏，除非它真的有可写功能
         if (!d.supported_count) return false;
       }
-      const fns = (d.functions || []).filter((f) => this._matchFilter(f));
-      if (!fns.length) return false;
-      if (!q) return true;
-      const hay = [d.name, d.model, d.manufacturer, d.area, d.integration, ...(d.functions || []).map((f) => f.name)]
-        .join(" ")
-        .toLowerCase();
-      return hay.includes(q);
+      return this._matchedFunctions(d).length > 0;
     });
+  }
+
+  /** 搜索：设备命中就显示它全部功能；否则只显示功能名/entity_id 命中的行 */
+  _matchedFunctions(device) {
+    const fns = this._functionsOf(device);
+    const q = this._query.trim().toLowerCase();
+    if (!q) return fns;
+    const hay = [device.name, device.model, device.manufacturer, device.area, device.integration]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    if (hay.includes(q)) return fns;
+    return fns.filter(
+      (f) => String(f.name || "").toLowerCase().includes(q) || String(f.entity_id || "").toLowerCase().includes(q)
+    );
+  }
+
+  /** 该行是否「不可用」：HA 里没有状态、或 HDL 侧没有对应功能类型 */
+  _isUnusable(fn) {
+    const s = String(fn.state || "");
+    return s === "unavailable" || s === "unknown" || !fn.supported;
   }
 
   _matchFilter(fn) {
@@ -218,7 +280,13 @@ class HdlLinkProvision extends HTMLElement {
   }
 
   _functionsOf(device) {
-    return (device.functions || []).filter((f) => this._matchFilter(f));
+    return (device.functions || []).filter(
+      (f) => this._matchFilter(f) && !this._removed.has(f.entity_id)
+    );
+  }
+
+  _removedCount() {
+    return this._removed.size;
   }
 
   _selectionPayload() {
@@ -326,6 +394,8 @@ class HdlLinkProvision extends HTMLElement {
     const counts = this._counts();
     const scan = this._scan;
     const devices = this._visibleDevices();
+    const allCollapsed =
+      devices.length > 0 && devices.every((d) => this._collapsed.has(d.device_id));
 
     const style = `
       <style>
@@ -355,6 +425,14 @@ class HdlLinkProvision extends HTMLElement {
                 background:var(--card-background-color,#fff); }
         .card[data-sel="1"] { border-color:var(--primary-color,#03a9f4); }
         .card-head { display:flex; align-items:center; gap:10px; padding:10px 14px; background:var(--secondary-background-color,#f5f6f7); }
+        .card-head .name { font-weight:600; font-size:15px; cursor:pointer; }
+        .chev { width:16px; text-align:center; cursor:pointer; color:var(--secondary-text-color,#6b6b70); font-size:13px; user-select:none; }
+        .iconbtn { border:none; background:transparent; color:var(--secondary-text-color,#9aa0a6); cursor:pointer;
+                   font-size:13px; line-height:1; padding:2px 6px; border-radius:4px; }
+        .iconbtn:hover { background:#fdecec; color:#c62828; }
+        tr.unusable td { opacity:.72; }
+        .chip.restore { border-color:#f5d9a8; background:#fffaf0; color:#a45c11; }
+        .hidden { display:none; }
         .card-head .name { font-weight:600; font-size:15px; }
         .tag { font-size:11px; padding:2px 8px; border-radius:999px; background:var(--card-background-color,#fff);
                border:1px solid var(--divider-color,#dcdfe3); color:var(--secondary-text-color,#6b6b70); }
@@ -451,6 +529,10 @@ class HdlLinkProvision extends HTMLElement {
             <div class="chip" data-filter="unsupported" data-active="${this._filter === "unsupported" ? 1 : 0}">暂不支持</div>
           </div>
           <label class="toggle"><input type="checkbox" id="sys" ${this._showSystem ? "checked" : ""}> 显示系统实体</label>
+          <div class="spacer"></div>
+          <div class="chip${this._removedCount() ? " restore" : " hidden"}" id="restore"
+            title="恢复被手动移除的不可用功能">已移除 ${this._removedCount()} 个 · 恢复</div>
+          <div class="chip" id="collapseAll">${allCollapsed ? "全部展开" : "全部收起"}</div>
         </div>
 
         ${body}
@@ -471,10 +553,11 @@ class HdlLinkProvision extends HTMLElement {
   }
 
   _deviceCard(device) {
-    const fns = this._functionsOf(device);
+    const fns = this._matchedFunctions(device);
     if (!fns.length) return "";
 
     const isExisting = !!device.existing;
+    const collapsed = this._collapsed.has(device.device_id);
     const selected = isExisting
       ? fns.length
       : fns.filter((f) => this._checked.has(f.entity_id)).length;
@@ -503,7 +586,8 @@ class HdlLinkProvision extends HTMLElement {
         } else {
           select = `<span class="unsupported">该功能暂无对应的 HDL 类型</span>`;
         }
-        return `<tr class="${isExisting ? "existing" : ""}">
+        const unusable = this._isUnusable(f);
+        return `<tr class="${isExisting ? "existing" : ""}${unusable ? " unusable" : ""}">
           <td style="width:34px">
             <input type="checkbox" data-entity="${escapeHtml(f.entity_id)}"
               ${on ? "checked" : ""} ${isExisting || !f.supported ? "disabled" : ""}
@@ -515,15 +599,21 @@ class HdlLinkProvision extends HTMLElement {
           </td>
           <td style="width:150px"><span class="state ${stateTone(f)}">${escapeHtml(stateText(f))}</span></td>
           <td style="width:170px">${select}</td>
+          <td style="width:44px;text-align:right">${
+            unusable
+              ? `<button class="iconbtn" data-remove="${escapeHtml(f.entity_id)}" title="从列表移除（只影响本页展示）">✕</button>`
+              : ""
+          }</td>
         </tr>`;
       })
       .join("");
 
-    return `<div class="card" data-sel="${selected && !isExisting ? 1 : 0}">
+    return `<div class="card" data-sel="${selected && !isExisting ? 1 : 0}" data-card="${escapeHtml(device.device_id)}">
       <div class="card-head">
+        <span class="chev" data-collapse="${escapeHtml(device.device_id)}" title="${collapsed ? "展开功能列表" : "收起功能列表"}">${collapsed ? "▸" : "▾"}</span>
         <input type="checkbox" data-device="${escapeHtml(device.device_id)}"
           ${allOn ? "checked" : ""} ${isExisting || !allSupported.length ? "disabled" : ""}>
-        <span class="name">${escapeHtml(device.name)}</span>
+        <span class="name" data-collapse="${escapeHtml(device.device_id)}">${escapeHtml(device.name)}</span>
         ${isExisting ? `<span class="tag done">已在 HDL 网关</span>` : ""}
         ${device.area ? `<span class="tag area">${escapeHtml(device.area)}</span>` : ""}
         ${device.integration ? `<span class="tag">${escapeHtml(device.integration)}</span>` : ""}
@@ -532,14 +622,16 @@ class HdlLinkProvision extends HTMLElement {
           isExisting
             ? `${fns.length} 个功能 · 只读`
             : `${device.supported_count} 个可写入 · 已选 ${selected}`
-        }</span>
+        }${collapsed ? " · 已收起" : ""}</span>
       </div>
-      <table class="rows">
+      ${collapsed
+        ? ""
+        : `<table class="rows">
         <thead><tr>
-          <th></th><th>功能</th><th>当前状态</th><th>写成 HDL 的功能</th>
+          <th></th><th>功能</th><th>当前状态</th><th>写成 HDL 的功能</th><th></th>
         </tr></thead>
         <tbody>${rows}</tbody>
-      </table>
+      </table>`}
     </div>`;
   }
 
@@ -688,6 +780,50 @@ class HdlLinkProvision extends HTMLElement {
 
     root.querySelectorAll("select[data-spk-for]").forEach((sel) => {
       sel.addEventListener("change", (e) => this._setSpk(e.target.dataset.spkFor, e.target.value));
+    });
+
+    // 收起 / 展开设备
+    root.querySelectorAll("[data-collapse]").forEach((node) => {
+      node.addEventListener("click", (e) => {
+        e.preventDefault();
+        const id = node.dataset.collapse;
+        if (this._collapsed.has(id)) this._collapsed.delete(id);
+        else this._collapsed.add(id);
+        this._savePrefs();
+        this._render();
+      });
+    });
+
+    // 移除不可用功能（只影响本页展示，可用「恢复」找回）
+    root.querySelectorAll("[data-remove]").forEach((node) => {
+      node.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this._removed.add(node.dataset.remove);
+        this._checked.delete(node.dataset.remove);
+        this._savePrefs();
+        this._render();
+      });
+    });
+
+    const restore = root.querySelector("#restore");
+    if (restore) restore.addEventListener("click", () => {
+      if (!this._removed.size) return;
+      this._removed.clear();
+      this._savePrefs();
+      this._render();
+    });
+
+    const collapseAll = root.querySelector("#collapseAll");
+    if (collapseAll) collapseAll.addEventListener("click", () => {
+      const visible = this._visibleDevices();
+      const allCollapsed = visible.length > 0 && visible.every((d) => this._collapsed.has(d.device_id));
+      for (const d of visible) {
+        if (allCollapsed) this._collapsed.delete(d.device_id);
+        else this._collapsed.add(d.device_id);
+      }
+      this._savePrefs();
+      this._render();
     });
   }
 }
