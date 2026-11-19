@@ -359,6 +359,48 @@ class HdlLinkConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_import(self, import_data: dict[str, Any]) -> ConfigFlowResult:
         return self.async_abort(reason="not_supported")
 
+    # ---------------------------------------------------------------- 重新配置
+    async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """网关换了 IP 时，只改地址并重载，已接入的功能与实体保持不变。"""
+        errors: dict[str, str] = {}
+        entry = self._get_reconfigure_entry()
+        old_host = str(entry.data.get(CONF_HOST, ""))
+        old_oid = str(entry.data.get(CONF_GW_ID, ""))
+
+        if user_input is not None:
+            host = str(user_input.get(CONF_HOST, "")).strip() or old_host
+            try:
+                info, functions, _ = await async_load_gateway(host, old_oid)
+            except LinkError as err:
+                LOGGER.warning("重新配置：连接 %s 失败: %s", host, err)
+                errors["base"] = "cannot_connect"
+            else:
+                if old_oid and info.oid and info.oid != old_oid:
+                    errors["base"] = "wrong_gateway"
+                elif not functions:
+                    errors["base"] = "no_functions"
+                else:
+                    return self.async_update_reload_and_abort(
+                        entry,
+                        title=f"{NAME} {info.name} ({info.host})",
+                        data_updates={
+                            CONF_HOST: host,
+                            CONF_GW_ID: info.oid,
+                            CONF_GW_NAME: info.name,
+                        },
+                    )
+
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=vol.Schema({vol.Required(CONF_HOST, default=old_host or "192.168.1.150"): str}),
+            errors=errors,
+            description_placeholders={
+                "host": old_host,
+                "gw": str(entry.data.get(CONF_GW_NAME, "")),
+                "count": str(len(entry.data.get(CONF_ENTITIES, []))),
+            },
+        )
+
     # ---------------------------------------------------------------- 选项
     @staticmethod
     @callback

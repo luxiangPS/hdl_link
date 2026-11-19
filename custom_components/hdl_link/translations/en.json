@@ -36,6 +36,13 @@
         "data": {
           "scenes": "Scenes"
         }
+      },
+      "reconfigure": {
+        "title": "Change gateway address",
+        "description": "Currently connected to {gw} ({host}, {count} functions). If the gateway moved to a new IP, change the address here; the integration reconnects and verifies the gateway identity. Existing functions and entities stay unchanged.",
+        "data": {
+          "host": "Gateway IP"
+        }
       }
     },
     "error": {
@@ -43,10 +50,12 @@
       "no_functions": "Connected, but no function was returned. Make sure the gateway project has devices configured.",
       "no_selection": "Select at least one function.",
       "need_host": "Pick a gateway from the list, or fill in the gateway IP / subnet.",
-      "invalid_host": "Unrecognized address. Use an IP (e.g. 192.168.1.150) or a subnet (e.g. 192.168.1.0/24)."
+      "invalid_host": "Unrecognized address. Use an IP (e.g. 192.168.1.150) or a subnet (e.g. 192.168.1.0/24).",
+      "wrong_gateway": "A different HDL gateway answered on this address (gateway id mismatch). Enter the new address of the original gateway, or add this gateway as a new hub."
     },
     "abort": {
-      "already_configured": "This gateway is already configured."
+      "already_configured": "This gateway is already configured.",
+      "reconfigure_successful": "Gateway address updated; the integration has been reloaded."
     }
   },
   "options": {
