@@ -47,7 +47,7 @@ PANEL_URL_PATH = "hdl-device-sync"
 PANEL_COMPONENT = "hdl-link-provision"
 STATIC_URL = "/hdl_link_static"
 PANEL_JS = Path(__file__).parent / "frontend"
-PANEL_VERSION = "2.3.2"
+PANEL_VERSION = "2.3.3"
 
 SERVICE_SCAN = "scan"
 SERVICE_PROVISION = "provision"
@@ -202,6 +202,7 @@ async def _async_setup_provision(hass: HomeAssistant) -> None:
 
 
 __all__ = ["async_setup_entry", "async_unload_entry", "CONF_GW_ID"]
+
 
 
 

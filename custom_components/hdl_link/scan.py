@@ -260,7 +260,7 @@ async def async_scan(hass: HomeAssistant) -> dict[str, Any]:
 
         # 可控功能优先，其次按域顺序、名称
         rows.sort(
-            key=(
+            key=lambda r: (
                 0 if r["supported"] else 1,
                 SCAN_DOMAINS.index(r["domain"]) if r["domain"] in SCAN_DOMAINS else 99,
                 r["name"],
