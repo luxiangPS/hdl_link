@@ -347,6 +347,9 @@ class HdlLinkProvision extends HTMLElement {
         .tag { font-size:11px; padding:2px 8px; border-radius:999px; background:var(--card-background-color,#fff);
                border:1px solid var(--divider-color,#dcdfe3); color:var(--secondary-text-color,#6b6b70); }
         .tag.area { border-color:transparent; background:#e8f4fe; color:#0277bd; }
+        .tag.done { border-color:transparent; background:#e6f4ea; color:#1e7b34; font-weight:600; }
+        .lockval { font-size:12px; color:var(--secondary-text-color,#6b6b70); }
+        tr.existing td { background:#fafbfc; }
         .card-head .meta { color:var(--secondary-text-color,#6b6b70); font-size:12px; }
         .card-head .right { margin-left:auto; font-size:12px; color:var(--secondary-text-color,#6b6b70); }
         .rows { width:100%; border-collapse:collapse; }
@@ -381,6 +384,9 @@ class HdlLinkProvision extends HTMLElement {
         .warn { color:#a45c11; font-weight:600; }
         .bad { color:#a12626; font-weight:600; }
         .note { font-size:12px; color:var(--secondary-text-color,#6b6b70); }
+        .notice { border:1px solid #f5d9a8; background:#fffaf0; border-radius:8px; padding:10px 14px; margin-bottom:14px; font-size:13px; }
+        .notice ul { margin:6px 0 0 18px; padding:0; }
+        .notice li { font-size:12px; color:var(--secondary-text-color,#6b6b70); line-height:1.7; }
       </style>`;
 
     let body = "";
@@ -413,10 +419,13 @@ class HdlLinkProvision extends HTMLElement {
         </div>
 
         <div class="overview">
-          <span>可接入设备 <b>${scan && scan.device_count != null ? scan.device_count : 0}</b> 台</span>
+          <span>已在网关 <b>${scan && scan.existing_device_count != null ? scan.existing_device_count : 0}</b> 台</span>
+          <span>可新增设备 <b>${(scan && scan.device_count != null ? scan.device_count : 0) - (scan && scan.existing_device_count != null ? scan.existing_device_count : 0)}</b> 台</span>
           <span>可写入功能 <b>${scan && scan.supported_count != null ? scan.supported_count : 0}</b> 个</span>
-          <span>已勾选 <b>${counts2.devices}</b> 台 · <b>${counts2.functions}</b> 个功能</span>
+          <span>本次已勾选 <b>${counts2.devices}</b> 台 · <b>${counts2.functions}</b> 个功能</span>
         </div>
+
+        ${this._duplicateBlock(scan)}
 
         <div class="toolbar">
           <div class="search">
@@ -453,31 +462,40 @@ class HdlLinkProvision extends HTMLElement {
     const fns = this._functionsOf(device);
     if (!fns.length) return "";
 
-    const selected = fns.filter((f) => this._checked.has(f.entity_id)).length;
+    const isExisting = !!device.existing;
+    const selected = isExisting
+      ? fns.length
+      : fns.filter((f) => this._checked.has(f.entity_id)).length;
     const allSupported = fns.filter((f) => f.supported);
-    const allOn = allSupported.length > 0 && allSupported.every((f) => this._checked.has(f.entity_id));
+    const allOn = isExisting || (allSupported.length > 0 && allSupported.every((f) => this._checked.has(f.entity_id)));
 
     const metaParts = [device.manufacturer, device.model].filter(Boolean).join(" · ");
 
     const rows = fns
       .map((f) => {
-        const checked = this._checked.has(f.entity_id);
+        const on = isExisting || this._checked.has(f.entity_id);
         const currentSpk = this._checked.get(f.entity_id) || f.suggested_spk || "";
         const shortName = this._shortName(f.name, device.name);
-        const select = f.spk_options && f.spk_options.length
-          ? `<select class="select" data-spk-for="${escapeHtml(f.entity_id)}" ${checked ? "" : "disabled"}>
+        let select;
+        if (isExisting) {
+          select = `<span class="lockval">${escapeHtml(SPK_LABELS[currentSpk] || f.spk_label || "—")}</span>`;
+        } else if (f.spk_options && f.spk_options.length) {
+          select = `<select class="select" data-spk-for="${escapeHtml(f.entity_id)}" ${on ? "" : "disabled"}>
               ${f.spk_options
                 .map(
                   (o) =>
                     `<option value="${escapeHtml(o.id)}" ${o.id === currentSpk ? "selected" : ""}>${escapeHtml(o.label)}</option>`
                 )
                 .join("")}
-             </select>`
-          : `<span class="unsupported">该功能暂无对应的 HDL 类型</span>`;
-        return `<tr>
+             </select>`;
+        } else {
+          select = `<span class="unsupported">该功能暂无对应的 HDL 类型</span>`;
+        }
+        return `<tr class="${isExisting ? "existing" : ""}">
           <td style="width:34px">
             <input type="checkbox" data-entity="${escapeHtml(f.entity_id)}"
-              ${checked ? "checked" : ""} ${f.supported ? "" : "disabled"}>
+              ${on ? "checked" : ""} ${isExisting || !f.supported ? "disabled" : ""}
+              title="${isExisting ? "该功能已在 HDL 网关中" : ""}">
           </td>
           <td>
             <span class="fn-name">${escapeHtml(shortName)}</span>
@@ -489,15 +507,20 @@ class HdlLinkProvision extends HTMLElement {
       })
       .join("");
 
-    return `<div class="card" data-sel="${selected ? 1 : 0}">
+    return `<div class="card" data-sel="${selected && !isExisting ? 1 : 0}">
       <div class="card-head">
-        <input type="checkbox" data-device="${escapeHtml(device.device_id)}" ${allOn ? "checked" : ""}
-          ${allSupported.length ? "" : "disabled"}>
+        <input type="checkbox" data-device="${escapeHtml(device.device_id)}"
+          ${allOn ? "checked" : ""} ${isExisting || !allSupported.length ? "disabled" : ""}>
         <span class="name">${escapeHtml(device.name)}</span>
+        ${isExisting ? `<span class="tag done">已在 HDL 网关</span>` : ""}
         ${device.area ? `<span class="tag area">${escapeHtml(device.area)}</span>` : ""}
         ${device.integration ? `<span class="tag">${escapeHtml(device.integration)}</span>` : ""}
         ${metaParts ? `<span class="meta">${escapeHtml(metaParts)}</span>` : ""}
-        <span class="right">${device.supported_count} 个可写入 · 已选 ${selected}</span>
+        <span class="right">${
+          isExisting
+            ? `${fns.length} 个功能 · 只读`
+            : `${device.supported_count} 个可写入 · 已选 ${selected}`
+        }</span>
       </div>
       <table class="rows">
         <thead><tr>
@@ -505,6 +528,26 @@ class HdlLinkProvision extends HTMLElement {
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
+    </div>`;
+  }
+
+  /** 同名功能提示：帮用户看出「重复」到底重复在哪 */
+  _duplicateBlock(scan) {
+    if (!scan || !scan.duplicate_groups) return "";
+    const list = Array.isArray(scan.duplicates) ? scan.duplicates : [];
+    const items = list
+      .slice(0, 6)
+      .map(
+        (d) =>
+          `<li>${escapeHtml(d.device)} 下的「${escapeHtml(d.name)}」有 ${d.entities.length} 个功能重名（${escapeHtml(
+            (d.entities || []).slice(0, 4).join(", ")
+          )}${d.entities.length > 4 ? " …" : ""}）</li>`
+      )
+      .join("");
+    return `<div class="notice">
+      <b>检测到 ${scan.duplicate_groups} 组重名功能</b>
+      <div class="note">这些功能在 HDL 工程里没有单独命名（或混入了别的工程），导入后实体名称会看起来重复。改名要在 HDL Studio / 网关工程里做，集成侧不会自动改。</div>
+      <ul>${items}</ul>
     </div>`;
   }
 

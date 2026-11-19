@@ -323,7 +323,7 @@ class HdlLinkConfigFlow(ConfigFlow, domain=DOMAIN):
         assert self._info is not None
         by_sid = {f.sid: f for f in self._functions}
         entities = []
-        for sid in self._selected:
+        for sid in dict.fromkeys(self._selected):  # 去重：同一功能只生成一个实体
             func = by_sid.get(sid)
             if func is None:
                 continue

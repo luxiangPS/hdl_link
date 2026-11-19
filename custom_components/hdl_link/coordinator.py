@@ -60,8 +60,39 @@ class HdlCoordinator(DataUpdateCoordinator[dict[str, dict[str, str]]]):
         }
         # 场景列表
         self.scenes: list[dict[str, Any]] = list(data.get("scenes") or [])
+        # sid -> 展示名（同一设备下重名时自动补通道号，避免出现一堆同名实体）
+        self.display_names: dict[str, str] = self._build_display_names()
         # oid -> 物理模块信息
         self.devices: dict[str, dict[str, Any]] = {}
+
+    @staticmethod
+    def _channel_of(sid: str) -> int | None:
+        """从 sid 取通道号：<oid:16><模块:4><通道:4><后缀:4>。"""
+        if len(sid) < 24:
+            return None
+        try:
+            return int(sid[20:24], 16)
+        except ValueError:
+            return None
+
+    def _build_display_names(self) -> dict[str, str]:
+        """给每个 sid 一个可读且在同一设备内唯一的名称。"""
+        seen: dict[tuple[str, str], int] = {}
+        out: dict[str, str] = {}
+        for sid, item in self.entities.items():
+            channel = self._channel_of(sid)
+            raw = str(item.get("name") or "").strip()
+            base = raw or (f"通道 {channel:02d}" if channel is not None else sid)
+            key = (str(item.get("oid") or ""), base)
+            count = seen.get(key, 0) + 1
+            seen[key] = count
+            if count == 1:
+                out[sid] = base
+            elif channel is not None:
+                out[sid] = f"{base}（通道 {channel:02d}）"
+            else:
+                out[sid] = f"{base} #{count}"
+        return out
 
     # ------------------------------------------------------------------ 连接
     async def async_connect(self) -> None:

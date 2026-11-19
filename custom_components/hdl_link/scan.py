@@ -218,10 +218,8 @@ async def async_scan(hass: HomeAssistant) -> dict[str, Any]:
     skipped_system = 0
 
     for device in dev_reg.devices.values():
-        # 排除 HDL LINK 自己创建的设备（它们本来就已在网关里）
-        if any(identifier[0] == DOMAIN for identifier in device.identifiers):
-            skipped_hdl += 1
-            continue
+        # HDL LINK 自己创建的设备：网关里已经有，标成「已接入」照常列出，但不可勾选修改
+        is_existing = any(identifier[0] == DOMAIN for identifier in device.identifiers)
         if device.disabled:
             continue
 
@@ -247,10 +245,16 @@ async def async_scan(hass: HomeAssistant) -> dict[str, Any]:
             pass
 
         is_system = integration_domain in SYSTEM_INTEGRATIONS
+        if is_existing:
+            # 已在网关里的设备：功能一律视为「已接入」，前端只读展示
+            for row in rows:
+                row["existing"] = True
+                row["supported"] = True
+            skipped_hdl += 1
         supported_count = sum(1 for r in rows if r["supported"])
 
         # 系统集成且一个可写功能都没有的设备，直接不进列表（例如 Sun / Backup）
-        if is_system and supported_count == 0:
+        if is_system and supported_count == 0 and not is_existing:
             skipped_system += 1
             continue
 
@@ -273,6 +277,7 @@ async def async_scan(hass: HomeAssistant) -> dict[str, Any]:
                 "integration": integration,
                 "integration_domain": integration_domain,
                 "is_system": is_system,
+                "existing": is_existing,
                 "functions": rows,
                 "function_count": len(rows),
                 "supported_count": supported_count,
@@ -281,20 +286,42 @@ async def async_scan(hass: HomeAssistant) -> dict[str, Any]:
             }
         )
 
-    # 可接入的设备排前面，其余按区域 + 名称
-    devices.sort(key=lambda d: (0 if d["supported_count"] else 1, d["area"] or "~", d["name"]))
+    # 已在网关里的设备排最前，其次可接入的，其余按区域 + 名称
+    devices.sort(
+        key=lambda d: (
+            0 if d["existing"] else 1,
+            0 if d["supported_count"] else 1,
+            d["area"] or "~",
+            d["name"],
+        )
+    )
+
+    # 同名功能检测：同一设备下多个功能重名（网关工程没起名、或混入别的工程时会出现）
+    name_map: dict[tuple[str, str], list[str]] = {}
+    for dev in devices:
+        for fn_row in dev["functions"]:
+            name_map.setdefault((dev["name"], fn_row["name"]), []).append(fn_row["entity_id"])
+    duplicates = [
+        {"device": key[0], "name": key[1], "entities": ids}
+        for key, ids in name_map.items()
+        if len(ids) > 1
+    ]
+    duplicates.sort(key=lambda x: (-len(x["entities"]), x["device"], x["name"]))
 
     total_functions = sum(len(d["functions"]) for d in devices)
     total_supported = sum(d["supported_count"] for d in devices)
     LOGGER.debug(
-        "扫描完成：%d 设备 / %d 功能（可写 %d，跳过 HDL %d、系统 %d）",
-        len(devices), total_functions, total_supported, skipped_hdl, skipped_system,
+        "扫描完成：%d 设备 / %d 功能（可写 %d，网关已有 %d、系统 %d，同名组 %d）",
+        len(devices), total_functions, total_supported, skipped_hdl, skipped_system, len(duplicates),
     )
     return {
         "devices": devices,
         "device_count": len(devices),
         "function_count": total_functions,
         "supported_count": total_supported,
+        "existing_device_count": sum(1 for d in devices if d["existing"]),
         "skipped_hdl_devices": skipped_hdl,
         "skipped_system_devices": skipped_system,
+        "duplicate_groups": len(duplicates),
+        "duplicates": duplicates[:30],
     }

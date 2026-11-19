@@ -22,12 +22,15 @@ class HdlEntity(CoordinatorEntity[HdlCoordinator]):
         self.spk: str = str(config.get("spk") or "")
         self.oid: str = str(config.get("oid") or "")
         raw_name = str(config.get("name") or "").strip()
-        if raw_name:
-            self.func_name = raw_name
-        else:
-            # 工程里没给功能起名时，用通道号生成可读名称，避免出现 48 位 sid
-            channel = channel_from_sid(self.sid)
-            self.func_name = f"通道 {channel:02d}" if channel is not None else self.sid
+        # 优先用协调器算好的唯一展示名（同一设备内重名会自动补通道号）
+        self.func_name = coordinator.display_names.get(self.sid) or ""
+        if not self.func_name:
+            if raw_name:
+                self.func_name = raw_name
+            else:
+                # 工程里没给功能起名时，用通道号生成可读名称，避免出现 48 位 sid
+                channel = channel_from_sid(self.sid)
+                self.func_name = f"通道 {channel:02d}" if channel is not None else self.sid
         self._attr_unique_id = f"{coordinator.gw_id}-{self.sid}-{key}"
         self._attr_name = None  # 用设备名 + 实体名组合
 
