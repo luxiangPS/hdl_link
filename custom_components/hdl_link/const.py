@@ -245,6 +245,33 @@ BINARY_SENSOR_KEYS: Final[dict[str, tuple[str, str]]] = {
 
 LIGHT_DIMMING_SPKS: Final = ("light.dimming", "light.cct", "light.rgb", "light.rgbw")
 
+# 系统 / 诊断类集成：它们产出的实体不是用户想接进 HDL 的真实设备
+SYSTEM_INTEGRATIONS: Final[frozenset[str]] = frozenset(
+    {
+        "sun",
+        "backup",
+        "hassio",
+        "supervisor",
+        "analytics",
+        "energy",
+        "recorder",
+        "history",
+        "logbook",
+        "updater",
+        "update",
+        "met",
+        "cloud",
+        "systemmonitor",
+        "mobile_app",
+        "repairs",
+        "trace",
+        "homeassistant",
+        "hacs",
+        "tailscale",
+    }
+)
+
+
 ON_VALUES: Final = ("on", "true", "1", "open", "active")
 READ_BATCH: Final = 40        # 单次 property/read 携带的 sid 上限
 CONNECT_TIMEOUT: Final = 12

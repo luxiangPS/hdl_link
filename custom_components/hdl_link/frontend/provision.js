@@ -1,55 +1,134 @@
-/* HDL LINK 设备同步面板：扫描 HA 设备 -> 勾选 -> 写入 HDL 网关 */
-const HDL_SPK_TITLES = {
-  "light.switch": "灯（开关）",
-  "light.dimming": "灯（调光）",
-  "light.cct": "灯（调光+色温）",
-  "light.rgb": "灯（RGB）",
-  "light.rgbw": "灯（RGBW）",
+/**
+ * HDL 设备同步 —— 面板前端（2.3.0）
+ *
+ * 产品结构：
+ *   1) 顶部：做什么、扫描结果概览
+ *   2) 工具条：搜索 / 筛选 / 是否显示系统实体
+ *   3) 设备卡片：设备名 + 区域 + 来源集成 + 每个功能「当前状态 → 将写成什么」
+ *   4) 底部固定操作条：已选多少 + 预览计划 / 写入网关
+ *   5) 结果表：逐项 oid / spk / 结果
+ */
+
+const DOMAIN_LABEL = {
+  light: "灯",
+  switch: "开关",
+  cover: "窗帘",
+  climate: "空调",
+  fan: "风机",
+  media_player: "影音",
+  lock: "门锁",
+  vacuum: "扫地机",
+  water_heater: "热水器",
+  humidifier: "加湿器",
+  valve: "水阀",
+  sensor: "传感器",
+  binary_sensor: "状态传感器",
+};
+
+const SPK_LABELS = {
+  "light.switch": "开关灯",
+  "light.dimming": "调光灯",
+  "light.cct": "色温灯",
+  "light.rgb": "RGB 灯",
+  "light.rgbw": "RGBW 灯",
   "panel.socket": "插座",
   "other.common": "通用开关",
-  "curtain.switch": "窗帘（开关停）",
+  "curtain.switch": "开关停窗帘",
   "curtain.trietex": "开合帘",
   "curtain.roller": "卷帘",
   "sensor.temperature": "温度",
   "sensor.humidity": "湿度",
   "sensor.light": "照度",
-  "sensor.co2": "CO2",
+  "sensor.co2": "CO₂",
   "sensor.pm25": "PM2.5",
   "sensor.pir": "人体感应",
   "sensor.doorwindow": "门磁",
 };
 
+function escapeHtml(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/** 把 HA 的状态翻译成人话 */
+function stateText(fn) {
+  const raw = String(fn.state || "");
+  if (!raw || raw === "unavailable") return "不可用";
+  if (raw === "unknown") return "未知";
+  const domain = fn.domain;
+  if (domain === "light" || domain === "switch" || domain === "fan") {
+    if (raw === "on") return "开";
+    if (raw === "off") return "关";
+  }
+  if (domain === "cover") {
+    const map = { open: "已打开", opening: "打开中", closed: "已关闭", closing: "关闭中" };
+    if (map[raw]) return map[raw];
+  }
+  if (domain === "lock") {
+    return { locked: "已上锁", unlocked: "未上锁", locking: "上锁中", unlocking: "解锁中" }[raw] || raw;
+  }
+  if (domain === "binary_sensor") {
+    return { on: "触发", off: "正常" }[raw] || raw;
+  }
+  const num = Number(raw);
+  if (!Number.isNaN(num) && raw.trim() !== "" && fn.unit) return `${raw} ${fn.unit}`;
+  return raw.length > 16 ? raw.slice(0, 16) + "…" : raw;
+}
+
+/** 状态颜色：开=主色，关=灰，异常=红 */
+function stateTone(fn) {
+  const raw = String(fn.state || "");
+  if (raw === "unavailable" || raw === "unknown") return "muted";
+  if (["on", "open", "locked", "opening"].includes(raw)) return "on";
+  if (["off", "closed", "unlocked"].includes(raw)) return "off";
+  return "value";
+}
+
 class HdlLinkProvision extends HTMLElement {
   constructor() {
     super();
-    this.attachShadow({ mode: "open" });
+    this._hass = null;
+    this._booted = false;
     this._scan = null;
-    this._selected = new Map(); // device_id -> Set(entity_id)
-    this._spk = new Map();      // entity_id -> spk
     this._busy = false;
     this._result = null;
+    this._query = "";
+    this._filter = "all"; // all | control | sensor | unsupported
+    this._showSystem = false;
+    this._dryRun = true;
+    this._checked = new Map(); // entity_id -> spk
+    this._renderQueued = false;
   }
 
   set hass(hass) {
-    const first = !this._hass;
     this._hass = hass;
-    if (first) this._boot();
+    if (!this._booted && hass) {
+      this._booted = true;
+      this._boot();
+    }
   }
 
   get hass() {
     return this._hass;
   }
 
-  async _boot() {
-    try {
-      this._render();
-      await this._load();
-    } catch (err) {
-      this._scan = { error: "面板初始化失败：" + (err && err.message ? err.message : String(err)) };
-      this._render();
+  connectedCallback() {
+    if (this._hass && !this._booted) {
+      this._booted = true;
+      this._boot();
     }
   }
 
+  async _boot() {
+    if (!this.shadowRoot) this.attachShadow({ mode: "open" });
+    this._render();
+    await this._load();
+  }
+
+  // ---------------------------------------------------------------- 数据
   async _req(method, path, body) {
     const hass = this._hass;
     const tok = hass && hass.auth && hass.auth.data ? hass.auth.data.access_token : null;
@@ -66,9 +145,7 @@ class HdlLinkProvision extends HTMLElement {
       } catch (e) {
         data = { error: text };
       }
-      if (!res.ok) {
-        throw new Error((data && (data.error || data.message)) || `HTTP ${res.status}`);
-      }
+      if (!res.ok) throw new Error((data && (data.error || data.message)) || `HTTP ${res.status}`);
       return data || {};
     }
     return hass.callApi(method, path, body);
@@ -79,261 +156,485 @@ class HdlLinkProvision extends HTMLElement {
     this._render();
     try {
       const data = await this._req("GET", "hdl_link/scan");
-      this._scan = data;
+      this._scan = data && Array.isArray(data.devices) ? data : { devices: [], error: "返回结构异常" };
+      this._pruneSelection();
     } catch (err) {
-      this._scan = { error: String(err && err.message ? err.message : err) };
+      this._scan = { devices: [], error: String(err && err.message ? err.message : err) };
     }
     this._busy = false;
     this._render();
   }
 
-  _toggleDevice(device, on) {
-    const set = new Set();
-    if (on) {
-      device.functions.forEach((f) => set.add(f.entity_id));
+  /** 扫描结果变了以后，丢掉已经不存在的勾选 */
+  _pruneSelection() {
+    const alive = new Set();
+    for (const d of this._devices()) {
+      for (const f of d.functions || []) alive.add(f.entity_id);
     }
-    this._selected.set(device.device_id, set);
-    this._render();
+    for (const id of [...this._checked.keys()]) {
+      if (!alive.has(id)) this._checked.delete(id);
+    }
   }
 
-  _toggleFunction(device, entityId, on) {
-    if (!this._selected.has(device.device_id)) this._selected.set(device.device_id, new Set());
-    const set = this._selected.get(device.device_id);
-    if (on) set.add(entityId);
-    else set.delete(entityId);
-    this._render();
+  _devices() {
+    const scan = this._scan;
+    return scan && Array.isArray(scan.devices) ? scan.devices : [];
+  }
+
+  _visibleDevices() {
+    const q = this._query.trim().toLowerCase();
+    return this._devices().filter((d) => {
+      if (!this._showSystem && d.is_system) {
+        // 系统实体默认隐藏，除非它真的有可写功能
+        if (!d.supported_count) return false;
+      }
+      const fns = (d.functions || []).filter((f) => this._matchFilter(f));
+      if (!fns.length) return false;
+      if (!q) return true;
+      const hay = [d.name, d.model, d.manufacturer, d.area, d.integration, ...(d.functions || []).map((f) => f.name)]
+        .join(" ")
+        .toLowerCase();
+      return hay.includes(q);
+    });
+  }
+
+  _matchFilter(fn) {
+    if (this._filter === "control") return fn.kind === "control" && fn.supported;
+    if (this._filter === "sensor") return fn.kind === "sensor" && fn.supported;
+    if (this._filter === "unsupported") return !fn.supported;
+    return true;
+  }
+
+  _functionsOf(device) {
+    return (device.functions || []).filter((f) => this._matchFilter(f));
   }
 
   _selectionPayload() {
-    if (!this._scan || !Array.isArray(this._scan.devices)) return [];
-    const devices = [];
-    this._scan.devices.forEach((device) => {
-      const sel = this._selected.get(device.device_id);
-      if (!sel || sel.size === 0) return;
-      const functions = device.functions
-        .filter((f) => sel.has(f.entity_id))
-        .map((f) => ({
+    const devices = this._devices();
+    const out = [];
+    for (const d of devices) {
+      const funcs = [];
+      for (const f of d.functions || []) {
+        const spk = this._checked.get(f.entity_id);
+        if (!spk) continue;
+        funcs.push({
           entity_id: f.entity_id,
           name: f.name,
-          spk: this._spk.get(f.entity_id) || f.suggested_spk || "",
+          spk,
           attributes: f.attributes || [],
-        }));
-      devices.push({
-        device_id: device.device_id,
-        name: device.name,
-        model: device.model,
-        functions,
+        });
+      }
+      if (!funcs.length) continue;
+      out.push({
+        device_id: d.device_id,
+        name: d.name,
+        model: d.model,
+        functions: funcs,
       });
-    });
-    return devices;
+    }
+    return out;
   }
 
-  async _submit() {
-    const devices = this._selectionPayload();
-    if (devices.length === 0) {
-      this._result = { error: "请至少勾选一个功能" };
-      this._render();
-      return;
+  _counts() {
+    let funcs = 0;
+    let devs = 0;
+    for (const d of this._devices()) {
+      let n = 0;
+      for (const f of d.functions || []) if (this._checked.has(f.entity_id)) n++;
+      if (n) {
+        devs++;
+        funcs += n;
+      }
     }
-    const dryRun = this.shadowRoot.querySelector("#dryrun").checked;
+    return { devices: devs, functions: funcs };
+  }
+
+  // ---------------------------------------------------------------- 交互
+  _toggleDevice(device, checked) {
+    const fns = this._functionsOf(device).filter((f) => f.supported);
+    for (const f of fns) {
+      if (checked) this._checked.set(f.entity_id, f.suggested_spk || "");
+      else this._checked.delete(f.entity_id);
+    }
+    this._render();
+  }
+
+  _toggleFunction(fn, checked, spk) {
+    if (checked) this._checked.set(fn.entity_id, spk || fn.suggested_spk || "");
+    else this._checked.delete(fn.entity_id);
+    this._render();
+  }
+
+  _setSpk(entityId, spk) {
+    if (this._checked.has(entityId)) this._checked.set(entityId, spk);
+    this._render();
+  }
+
+  async _run() {
+    const devices = this._selectionPayload();
+    if (!devices.length) return;
     this._busy = true;
+    this._result = null;
     this._render();
     try {
       const res = await this._req("POST", "hdl_link/provision", {
         devices,
-        dry_run: dryRun,
+        dry_run: this._dryRun,
       });
-      this._result = res;
+      this._result = res || {};
     } catch (err) {
-      this._result = { error: String(err && err.message ? err.message : err) };
+      this._result = { errors: [String(err && err.message ? err.message : err)] };
     }
     this._busy = false;
     this._render();
   }
 
+  async _showToast(msg) {
+    this.shadowRoot.querySelectorAll(".hint").forEach((n) => n.remove());
+  }
+
+  // ---------------------------------------------------------------- 渲染
   _render() {
-    try {
-      this._renderInner();
-    } catch (err) {
-      const msg = "面板渲染失败：" + (err && err.message ? err.message : String(err));
-      this.shadowRoot.innerHTML =
-        `<div style="padding:24px;font-family:sans-serif;color:#c62828">${escapeHtml(msg)}</div>`;
-      console.error("[hdl-link-provision]", err);
-    }
+    if (this._renderQueued) return;
+    this._renderQueued = true;
+    queueMicrotask(() => {
+      this._renderQueued = false;
+      try {
+        this._renderInner();
+      } catch (err) {
+        if (this.shadowRoot) {
+          this.shadowRoot.innerHTML = `<div style="padding:24px;color:#c62828;font-family:sans-serif">
+            面板渲染失败：${escapeHtml(err && err.message ? err.message : String(err))}</div>`;
+        }
+      }
+    });
   }
 
   _renderInner() {
-    const sr = this.shadowRoot;
-    const scrollTop = sr.querySelector("#list") ? sr.querySelector("#list").scrollTop : 0;
+    const counts = this._counts();
     const scan = this._scan;
-    let header = "";
-    let body = "";
+    const devices = this._visibleDevices();
 
+    const style = `
+      <style>
+        :host { display: block; }
+        .wrap { padding: 16px 20px 96px; font-size: 14px; color: var(--primary-text-color, #1c1c1e); }
+        .head { display:flex; align-items:flex-start; gap:16px; flex-wrap:wrap; }
+        .head h2 { margin:0 0 4px; font-size: 20px; font-weight:600; }
+        .head p { margin:0; color: var(--secondary-text-color,#6b6b70); font-size:13px; line-height:1.5; max-width:640px; }
+        .head .spacer { flex:1; }
+        .btn { border:1px solid var(--divider-color,#dcdfe3); background:var(--card-background-color,#fff);
+               color:var(--primary-text-color,#1c1c1e); border-radius:8px; padding:8px 14px; font-size:13px; cursor:pointer; }
+        .btn:hover { background:var(--secondary-background-color,#f5f6f7); }
+        .btn.primary { background:var(--primary-color,#03a9f4); border-color:transparent; color:#fff; font-weight:600; }
+        .btn.primary[disabled] { opacity:.5; cursor:not-allowed; }
+        .overview { margin:16px 0 12px; display:flex; gap:20px; flex-wrap:wrap; font-size:13px; color:var(--secondary-text-color,#6b6b70); }
+        .overview b { color:var(--primary-text-color,#1c1c1e); font-size:15px; }
+        .toolbar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:14px; }
+        .search { flex:1; min-width:220px; display:flex; align-items:center; gap:8px;
+                  border:1px solid var(--divider-color,#dcdfe3); border-radius:8px; padding:6px 10px; background:var(--card-background-color,#fff); }
+        .search input { border:none; outline:none; font-size:13px; width:100%; background:transparent; color:var(--primary-text-color,#1c1c1e); }
+        .chips { display:flex; gap:6px; }
+        .chip { border:1px solid var(--divider-color,#dcdfe3); border-radius:999px; padding:5px 12px; font-size:12px;
+                cursor:pointer; background:var(--card-background-color,#fff); color:var(--secondary-text-color,#6b6b70); }
+        .chip[data-active="1"] { border-color:var(--primary-color,#03a9f4); color:var(--primary-color,#03a9f4); font-weight:600; }
+        .toggle { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--secondary-text-color,#6b6b70); cursor:pointer; }
+        .card { border:1px solid var(--divider-color,#dcdfe3); border-radius:10px; margin-bottom:12px; overflow:hidden;
+                background:var(--card-background-color,#fff); }
+        .card[data-sel="1"] { border-color:var(--primary-color,#03a9f4); }
+        .card-head { display:flex; align-items:center; gap:10px; padding:10px 14px; background:var(--secondary-background-color,#f5f6f7); }
+        .card-head .name { font-weight:600; font-size:15px; }
+        .tag { font-size:11px; padding:2px 8px; border-radius:999px; background:var(--card-background-color,#fff);
+               border:1px solid var(--divider-color,#dcdfe3); color:var(--secondary-text-color,#6b6b70); }
+        .tag.area { border-color:transparent; background:#e8f4fe; color:#0277bd; }
+        .card-head .meta { color:var(--secondary-text-color,#6b6b70); font-size:12px; }
+        .card-head .right { margin-left:auto; font-size:12px; color:var(--secondary-text-color,#6b6b70); }
+        .rows { width:100%; border-collapse:collapse; }
+        .rows th { text-align:left; font-weight:500; font-size:12px; color:var(--secondary-text-color,#6b6b70); padding:8px 10px; border-bottom:1px solid var(--divider-color,#eef0f2); }
+        .rows td { padding:8px 10px; border-bottom:1px solid var(--divider-color,#f2f4f6); vertical-align:middle; }
+        .rows tr:last-child td { border-bottom:none; }
+        .fn-name { font-size:13px; }
+        .fn-sub { display:block; font-size:11px; color:var(--secondary-text-color,#9aa0a6); margin-top:2px; }
+        .state { font-size:12px; padding:2px 8px; border-radius:4px; background:var(--secondary-background-color,#f2f4f6); white-space:nowrap; }
+        .state.on { background:#e6f4ea; color:#1e7b34; }
+        .state.off { background:#f1f3f4; color:#5f6368; }
+        .state.muted { background:#fdf0e6; color:#a45c11; }
+        .state.value { background:#eef1fb; color:#33459b; }
+        .select { font-size:12px; padding:4px 6px; border-radius:6px; border:1px solid var(--divider-color,#dcdfe3);
+                  background:var(--card-background-color,#fff); color:var(--primary-text-color,#1c1c1e); }
+        .unsupported { font-size:12px; color:#a45c11; }
+        .empty { border:1px dashed var(--divider-color,#dcdfe3); border-radius:10px; padding:28px; text-align:center;
+                 color:var(--secondary-text-color,#6b6b70); font-size:13px; line-height:1.7; }
+        .error { border:1px solid #f3c1c1; background:#fdf2f2; color:#a12626; border-radius:8px; padding:10px 14px;
+                 font-size:13px; margin-bottom:12px; }
+        .bar { position:fixed; left:0; right:0; bottom:0; display:flex; align-items:center; gap:14px; padding:12px 20px;
+               background:var(--card-background-color,#fff); border-top:1px solid var(--divider-color,#dcdfe3); }
+        .bar .sum { font-size:13px; }
+        .bar .sum b { font-size:15px; }
+        .bar .spacer { flex:1; }
+        .result { margin-top:18px; }
+        .result h3 { font-size:15px; margin:0 0 8px; }
+        .result table { width:100%; border-collapse:collapse; font-size:12px; }
+        .result th { text-align:left; color:var(--secondary-text-color,#6b6b70); font-weight:500; padding:6px 8px; border-bottom:1px solid var(--divider-color,#eef0f2); }
+        .result td { padding:6px 8px; border-bottom:1px solid var(--divider-color,#f4f6f8); }
+        .ok { color:#1e7b34; font-weight:600; }
+        .warn { color:#a45c11; font-weight:600; }
+        .bad { color:#a12626; font-weight:600; }
+        .note { font-size:12px; color:var(--secondary-text-color,#6b6b70); }
+      </style>`;
+
+    let body = "";
     if (this._busy && !scan) {
       body = `<div class="empty">正在扫描 HA 设备…</div>`;
-    } else if (!scan) {
-      body = `<div class="empty">尚未扫描</div>`;
-    } else if (scan.error) {
-      body = `<div class="empty err">扫描失败：${escapeHtml(scan.error)}</div>`;
-    } else if (scan.device_count === 0) {
-      body = `<div class="empty">没有找到可同步的设备</div>`;
+    } else if (scan && scan.error) {
+      body = `<div class="error">扫描失败：${escapeHtml(scan.error)}<br>请确认 HDL LINK 集成已加载，再点右上角「重新扫描」。</div>`;
+    } else if (devices.length === 0) {
+      body = `<div class="empty">
+        没有找到可同步的设备<br>
+        <span class="note">只包含 HA 里真实设备的可控功能与常用传感器；HDL 自建实体和系统虚拟实体已自动排除。</span>
+      </div>`;
     } else {
-      header = `<div class="stats">共 <b>${scan.device_count}</b> 台设备、<b>${scan.function_count}</b> 个功能（已排除 HDL 自有设备 ${scan.skipped_hdl_devices} 台）</div>`;
-      body = scan.devices.map((device) => {
-        const sel = this._selected.get(device.device_id) || new Set();
-        const allOn = sel.size === device.functions.length && device.functions.length > 0;
-        const rows = device.functions
-          .map((f) => {
-            const spk = this._spk.get(f.entity_id) || f.suggested_spk || "";
-            const opts = (f.spk_options.length ? f.spk_options : [spk])
-              .filter(Boolean)
-              .map(
-                (o) =>
-                  `<option value="${o}" ${o === spk ? "selected" : ""}>${HDL_SPK_TITLES[o] || o}</option>`
-              )
-              .join("");
-            return `<tr>
-              <td class="cb"><input type="checkbox" data-dev="${device.device_id}" data-ent="${f.entity_id}" ${sel.has(f.entity_id) ? "checked" : ""}></td>
-              <td><span class="fname">${escapeHtml(f.name)}</span><div class="eid">${escapeHtml(f.entity_id)}</div></td>
-              <td class="dom">${f.domain}</td>
-              <td class="st">${escapeHtml(String(f.state))}</td>
-              <td class="spk"><select data-ent="${f.entity_id}">${opts}</select></td>
-            </tr>`;
-          })
-          .join("");
-        return `<div class="dev">
-          <div class="devhead">
-            <input type="checkbox" class="devcb" data-dev="${device.device_id}" ${allOn ? "checked" : ""}>
-            <span class="dname">${escapeHtml(device.name)}</span>
-            <span class="tag">${device.functions.length} 个功能</span>
-            <span class="meta">${escapeHtml(device.integration || "")}${device.area ? " · " + escapeHtml(device.area) : ""}${device.model ? " · " + escapeHtml(device.model) : ""}</span>
-            <span class="status ${sel.size ? "on" : ""}">${sel.size} 已选</span>
-          </div>
-          <table>
-            <thead><tr><th></th><th>功能</th><th>类型</th><th>状态</th><th>HDL 功能类型</th></tr></thead>
-            <tbody>${rows}</tbody>
-          </table>
-        </div>`;
-      }).join("");
+      body = devices.map((d) => this._deviceCard(d)).join("");
     }
 
-    const totalSelected = this._selectionPayload().reduce((n, d) => n + d.functions.length, 0);
-    const resultHtml = this._result ? this._resultHtml() : "";
-    const selCount = this._selectedCount();
+    const resultHtml = this._result ? this._resultBlock(this._result) : "";
+    const counts2 = counts;
+    const hasSel = counts2.functions > 0;
 
-    sr.innerHTML = `
-      <style>
-        :host { display:block; font-family: var(--paper-font-body1_-_font-family, sans-serif); color: var(--primary-text-color); }
-        .bar { display:flex; align-items:center; gap:12px; padding:12px 16px; border-bottom:1px solid var(--divider-color); position:sticky; top:0; background: var(--card-background-color); z-index:2; flex-wrap:wrap; }
-        .bar h2 { margin:0; font-size:18px; font-weight:600; }
-        button { border:1px solid var(--divider-color); background:var(--card-background-color); color:var(--primary-text-color); border-radius:8px; padding:8px 14px; font-size:14px; cursor:pointer; }
-        button.primary { background: var(--primary-color); color: var(--text-primary-color, #fff); border-color: transparent; }
-        button:disabled { opacity:.5; cursor:default; }
-        .stats { padding:8px 16px; font-size:13px; color: var(--secondary-text-color); }
-        #list { max-height: calc(100vh - 190px); overflow:auto; padding: 0 16px 16px; }
-        .dev { border:1px solid var(--divider-color); border-radius:10px; margin-bottom:12px; overflow:hidden; }
-        .devhead { display:flex; align-items:center; gap:10px; padding:10px 12px; background: var(--secondary-background-color, #f5f5f5); }
-        .dname { font-weight:600; font-size:15px; }
-        .tag { font-size:12px; padding:2px 8px; border-radius:10px; background: var(--primary-color); color:#fff; }
-        .meta { font-size:12px; color: var(--secondary-text-color); flex:1; }
-        .status { font-size:12px; color: var(--secondary-text-color); }
-        .status.on { color: var(--primary-color); font-weight:600; }
-        table { width:100%; border-collapse:collapse; font-size:13px; }
-        th { text-align:left; padding:6px 10px; color: var(--secondary-text-color); font-weight:500; border-bottom:1px solid var(--divider-color); }
-        td { padding:6px 10px; border-bottom:1px solid var(--divider-color); vertical-align:middle; }
-        td.cb { width:28px; }
-        .fname { font-size:13px; }
-        .eid { font-size:11px; color: var(--secondary-text-color); }
-        .st, .dom { font-size:12px; color: var(--secondary-text-color); }
-        select { padding:5px 8px; border-radius:6px; border:1px solid var(--divider-color); background: var(--card-background-color); color: var(--primary-text-color); font-size:13px; }
-        .empty { padding:40px; text-align:center; color: var(--secondary-text-color); }
-        .empty.err { color: var(--error-color, #c62828); }
-        .foot { display:flex; align-items:center; gap:12px; padding:12px 16px; border-top:1px solid var(--divider-color); position:sticky; bottom:0; background: var(--card-background-color); }
-        .foot label { font-size:13px; color: var(--secondary-text-color); display:flex; align-items:center; gap:6px; }
-        .result { margin:0 16px 16px; padding:12px; border-radius:10px; background: var(--secondary-background-color,#f5f5f5); font-size:13px; white-space:pre-wrap; }
-        .result.plan { border:1px solid var(--warning-color, #ff9800); }
-      </style>
+    this.shadowRoot.innerHTML = `${style}
+      <div class="wrap">
+        <div class="head">
+          <div>
+            <h2>HDL 设备同步</h2>
+            <p>把 Home Assistant 里的设备注册到 HDL 网关：每台设备生成一个物理模型，每个功能生成一个功能点，之后可在 HDL 面板、场景、按键里调用。</p>
+          </div>
+          <div class="spacer"></div>
+          <button class="btn" id="rescan" ${this._busy ? "disabled" : ""}>重新扫描</button>
+        </div>
+
+        <div class="overview">
+          <span>可接入设备 <b>${scan && scan.device_count != null ? scan.device_count : 0}</b> 台</span>
+          <span>可写入功能 <b>${scan && scan.supported_count != null ? scan.supported_count : 0}</b> 个</span>
+          <span>已勾选 <b>${counts2.devices}</b> 台 · <b>${counts2.functions}</b> 个功能</span>
+        </div>
+
+        <div class="toolbar">
+          <div class="search">
+            <span>搜索</span>
+            <input id="q" placeholder="设备名 / 型号 / 区域 / 功能名" value="${escapeHtml(this._query)}">
+          </div>
+          <div class="chips">
+            <div class="chip" data-filter="all" data-active="${this._filter === "all" ? 1 : 0}">全部</div>
+            <div class="chip" data-filter="control" data-active="${this._filter === "control" ? 1 : 0}">可控功能</div>
+            <div class="chip" data-filter="sensor" data-active="${this._filter === "sensor" ? 1 : 0}">传感器</div>
+            <div class="chip" data-filter="unsupported" data-active="${this._filter === "unsupported" ? 1 : 0}">暂不支持</div>
+          </div>
+          <label class="toggle"><input type="checkbox" id="sys" ${this._showSystem ? "checked" : ""}> 显示系统实体</label>
+        </div>
+
+        ${body}
+        ${resultHtml}
+      </div>
+
       <div class="bar">
-        <h2>HDL 设备同步</h2>
-        <button id="reload" ${this._busy ? "disabled" : ""}>重新扫描</button>
-        <span style="flex:1"></span>
-        <span class="stats">已勾选 ${selCount} 个功能 / ${totalSelected}</span>
-        <button class="primary" id="submit" ${this._busy || !selCount ? "disabled" : ""}>添加到 HDL 网关</button>
-      </div>
-      ${header}
-      <div id="list">${body}</div>
-      <div class="foot">
-        <label><input type="checkbox" id="dryrun" checked> 先演练（不写网关，只看计划）</label>
-        <span style="flex:1"></span>
-        ${this._busy ? "<span class='stats'>处理中…</span>" : ""}
-      </div>
-      ${resultHtml}
-    `;
+        <label class="toggle"><input type="checkbox" id="dry" ${this._dryRun ? "checked" : ""}> 先预览，不写网关</label>
+        <span class="note" id="dryTip">${this._dryRun ? "只生成写入计划，便于核对 oid / 功能类型" : "将真实写入 HDL 网关，网关不可达时会明确报错"}</span>
+        <div class="spacer"></div>
+        <span class="sum">已选 <b>${counts2.devices}</b> 台 · <b>${counts2.functions}</b> 个功能</span>
+        <button class="btn primary" id="run" ${hasSel && !this._busy ? "" : "disabled"}>
+          ${this._busy ? "处理中…" : this._dryRun ? "预览写入计划" : "写入 HDL 网关"}
+        </button>
+      </div>`;
 
-    sr.querySelector("#reload").onclick = () => this._load();
-    sr.querySelector("#submit").onclick = () => this._submit();
-    const devList = (scan && Array.isArray(scan.devices)) ? scan.devices : [];
-    sr.querySelectorAll("input.devcb").forEach((el) => {
-      el.onchange = () => {
-        const device = devList.find((d) => d.device_id === el.dataset.dev);
-        if (device) this._toggleDevice(device, el.checked);
-      };
-    });
-    sr.querySelectorAll("input[data-ent]").forEach((el) => {
-      el.onchange = () => {
-        const device = devList.find((d) => d.device_id === el.dataset.dev);
-        if (device) this._toggleFunction(device, el.dataset.ent, el.checked);
-      };
-    });
-    sr.querySelectorAll("select[data-ent]").forEach((el) => {
-      el.onchange = () => {
-        this._spk.set(el.dataset.ent, el.value);
-      };
-    });
-    const list = sr.querySelector("#list");
-    if (list) list.scrollTop = scrollTop;
+    this._bind();
   }
 
-  _selectedCount() {
-    let n = 0;
-    this._selected.forEach((set) => (n += set.size));
-    return n;
+  _deviceCard(device) {
+    const fns = this._functionsOf(device);
+    if (!fns.length) return "";
+
+    const selected = fns.filter((f) => this._checked.has(f.entity_id)).length;
+    const allSupported = fns.filter((f) => f.supported);
+    const allOn = allSupported.length > 0 && allSupported.every((f) => this._checked.has(f.entity_id));
+
+    const metaParts = [device.manufacturer, device.model].filter(Boolean).join(" · ");
+
+    const rows = fns
+      .map((f) => {
+        const checked = this._checked.has(f.entity_id);
+        const currentSpk = this._checked.get(f.entity_id) || f.suggested_spk || "";
+        const shortName = this._shortName(f.name, device.name);
+        const select = f.spk_options && f.spk_options.length
+          ? `<select class="select" data-spk-for="${escapeHtml(f.entity_id)}" ${checked ? "" : "disabled"}>
+              ${f.spk_options
+                .map(
+                  (o) =>
+                    `<option value="${escapeHtml(o.id)}" ${o.id === currentSpk ? "selected" : ""}>${escapeHtml(o.label)}</option>`
+                )
+                .join("")}
+             </select>`
+          : `<span class="unsupported">该功能暂无对应的 HDL 类型</span>`;
+        return `<tr>
+          <td style="width:34px">
+            <input type="checkbox" data-entity="${escapeHtml(f.entity_id)}"
+              ${checked ? "checked" : ""} ${f.supported ? "" : "disabled"}>
+          </td>
+          <td>
+            <span class="fn-name">${escapeHtml(shortName)}</span>
+            <span class="fn-sub">${escapeHtml(DOMAIN_LABEL[f.domain] || f.domain)} · ${escapeHtml(f.entity_id)}</span>
+          </td>
+          <td style="width:150px"><span class="state ${stateTone(f)}">${escapeHtml(stateText(f))}</span></td>
+          <td style="width:170px">${select}</td>
+        </tr>`;
+      })
+      .join("");
+
+    return `<div class="card" data-sel="${selected ? 1 : 0}">
+      <div class="card-head">
+        <input type="checkbox" data-device="${escapeHtml(device.device_id)}" ${allOn ? "checked" : ""}
+          ${allSupported.length ? "" : "disabled"}>
+        <span class="name">${escapeHtml(device.name)}</span>
+        ${device.area ? `<span class="tag area">${escapeHtml(device.area)}</span>` : ""}
+        ${device.integration ? `<span class="tag">${escapeHtml(device.integration)}</span>` : ""}
+        ${metaParts ? `<span class="meta">${escapeHtml(metaParts)}</span>` : ""}
+        <span class="right">${device.supported_count} 个可写入 · 已选 ${selected}</span>
+      </div>
+      <table class="rows">
+        <thead><tr>
+          <th></th><th>功能</th><th>当前状态</th><th>写成 HDL 的功能</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
   }
 
-  _resultHtml() {
-    const r = this._result;
-    if (!r) return "";
-    if (r.error) return `<div class="result">失败：${escapeHtml(r.error)}</div>`;
-    const lines = [];
-    lines.push(`模式：${r.dry_run ? "演练（未写入网关）" : "已写入网关"}`);
-    lines.push(`新增设备：${r.created_devices}　新增功能：${r.created_functions}`);
-    (r.plan || []).forEach((d) => {
-      lines.push("");
-      lines.push(`设备 ${d.name} → oid ${d.oid || "(未取到)"}`);
-      (d.functions || []).forEach((f) => {
-        lines.push(`　${f.ok ? "✓" : "✗"} sid ${f.sid}　${f.name}　${f.spk}${f.note ? "　" + f.note : ""}`);
+  _shortName(name, deviceName) {
+    if (!name) return "";
+    if (deviceName && name.startsWith(deviceName)) {
+      const rest = name.slice(deviceName.length).trim();
+      if (rest) return rest;
+    }
+    return name;
+  }
+
+  _resultBlock(res) {
+    const plan = Array.isArray(res.plan) ? res.plan : [];
+    const errors = Array.isArray(res.errors) ? res.errors : [];
+    const warnings = Array.isArray(res.warnings) ? res.warnings : [];
+    if (!plan.length && !errors.length) {
+      return `<div class="result"><h3>结果</h3><div class="note">无内容</div></div>`;
+    }
+
+    const rows = [];
+    for (const dev of plan) {
+      const devName = dev.name || dev.device_id || "";
+      const oid = dev.oid || "（待网关分配）";
+      const funcs = Array.isArray(dev.functions) ? dev.functions : [];
+      if (!funcs.length) {
+        rows.push(`<tr><td>${escapeHtml(devName)}</td><td colspan="3" class="note">—</td>
+          <td colspan="2" class="warn">设备未建立</td></tr>`);
+        continue;
+      }
+      for (const fn of funcs) {
+        let stateTxt = "计划";
+        let cls = "note";
+        if (!res.dry_run) {
+          if (fn.ok) {
+            stateTxt = "已写入";
+            cls = "ok";
+          } else if (fn.note && fn.note.indexOf("跳过") >= 0) {
+            stateTxt = "跳过";
+            cls = "note";
+          } else {
+            stateTxt = "未生效";
+            cls = "warn";
+          }
+        }
+        rows.push(`<tr>
+          <td>${escapeHtml(devName)}</td>
+          <td>${escapeHtml(fn.name || fn.entity_id || "")}</td>
+          <td>${escapeHtml(SPK_LABELS[fn.spk] || fn.spk || "")}</td>
+          <td>${escapeHtml(oid)}</td>
+          <td class="${cls}">${stateTxt}</td>
+          <td class="note">${escapeHtml(fn.note || "")}</td>
+        </tr>`);
+      }
+    }
+
+    return `<div class="result">
+      <h3>${res.dry_run ? "写入计划（未写入网关）" : "写入结果"}</h3>
+      ${errors.length ? `<div class="error">${errors.map((e) => escapeHtml(e)).join("<br>")}</div>` : ""}
+      ${warnings.length ? `<div class="note">${warnings.map((w) => escapeHtml(w)).join("<br>")}</div>` : ""}
+      <table>
+        <thead><tr><th>设备</th><th>功能</th><th>HDL 类型</th><th>oid</th><th>结果</th><th>说明</th></tr></thead>
+        <tbody>${rows.join("")}</tbody>
+      </table>
+    </div>`;
+  }
+
+  _bind() {
+    const root = this.shadowRoot;
+    if (!root) return;
+
+    const rescan = root.querySelector("#rescan");
+    if (rescan) rescan.addEventListener("click", () => this._load());
+
+    const q = root.querySelector("#q");
+    if (q) {
+      q.addEventListener("input", (e) => {
+        this._query = e.target.value;
+        this._render();
+        const box = this.shadowRoot.querySelector("#q");
+        if (box) {
+          box.focus();
+          box.setSelectionRange(box.value.length, box.value.length);
+        }
+      });
+    }
+
+    root.querySelectorAll(".chip").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        this._filter = chip.dataset.filter;
+        this._render();
       });
     });
-    if ((r.warnings || []).length) {
-      lines.push("");
-      lines.push("提醒：");
-      r.warnings.forEach((w) => lines.push("· " + w));
-    }
-    if ((r.errors || []).length) {
-      lines.push("");
-      lines.push("错误：");
-      r.errors.forEach((e) => lines.push("· " + e));
-    }
-    return `<div class="result${r.dry_run ? " plan" : ""}">${escapeHtml(lines.join("\n"))}</div>`;
-  }
-}
 
-function escapeHtml(value) {
-  return String(value === undefined || value === null ? "" : value)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+    const sys = root.querySelector("#sys");
+    if (sys) sys.addEventListener("change", (e) => {
+      this._showSystem = e.target.checked;
+      this._render();
+    });
+
+    const dry = root.querySelector("#dry");
+    if (dry) dry.addEventListener("change", (e) => {
+      this._dryRun = e.target.checked;
+      this._render();
+    });
+
+    const run = root.querySelector("#run");
+    if (run) run.addEventListener("click", () => this._run());
+
+    const visible = this._visibleDevices();
+    root.querySelectorAll("input[data-device]").forEach((box) => {
+      const deviceId = box.dataset.device;
+      const device = visible.find((d) => d.device_id === deviceId);
+      box.addEventListener("change", (e) => {
+        if (device) this._toggleDevice(device, e.target.checked);
+      });
+    });
+
+    root.querySelectorAll("input[data-entity]").forEach((box) => {
+      const entityId = box.dataset.entity;
+      const fn = visible.flatMap((d) => d.functions || []).find((f) => f.entity_id === entityId);
+      box.addEventListener("change", (e) => {
+        if (fn) this._toggleFunction(fn, e.target.checked, fn.suggested_spk);
+      });
+    });
+
+    root.querySelectorAll("select[data-spk-for]").forEach((sel) => {
+      sel.addEventListener("change", (e) => this._setSpk(e.target.dataset.spkFor, e.target.value));
+    });
+  }
 }
 
 customElements.define("hdl-link-provision", HdlLinkProvision);
