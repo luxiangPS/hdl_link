@@ -43,9 +43,11 @@ PLATFORMS: list[Platform] = [
 
 HEARTBEAT_INTERVAL = 30
 
-PANEL_URL_PATH = "hdl-link-provision"
+PANEL_URL_PATH = "hdl-device-sync"
+PANEL_COMPONENT = "hdl-link-provision"
 STATIC_URL = "/hdl_link_static"
 PANEL_JS = Path(__file__).parent / "frontend"
+PANEL_VERSION = "2.2.1"
 
 SERVICE_SCAN = "scan"
 SERVICE_PROVISION = "provision"
@@ -58,6 +60,12 @@ PROVISION_SCHEMA = vol.Schema(
         vol.Optional("entry_id"): cv.string,
     }
 )
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigEntry) -> bool:
+    """集成装载时注册静态资源/面板/接口/服务（必须在 HTTP 服务启动前完成）。"""
+    await _async_setup_provision(hass)
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -116,34 +124,41 @@ async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> Non
 async def _async_setup_provision(hass: HomeAssistant) -> None:
     """注册静态资源、REST 接口、侧边栏面板与两个服务。"""
     flag_key = f"{DOMAIN}_provision_ready"
+    static_key = f"{DOMAIN}_static_ready"
     if hass.data.get(flag_key):
         return
     hass.data[flag_key] = True
 
-    # 1) 面板前端静态文件
-    try:
-        await hass.http.async_register_static_paths(
-            [StaticPathConfig(STATIC_URL, str(PANEL_JS), cache_headers=False)]
-        )
-    except RuntimeError as err:  # 重复注册时忽略
-        LOGGER.debug("静态路径注册跳过: %s", err)
+    # 1) 面板前端静态文件（必须在 HTTP 服务启动阶段注册，晚于启动会被拒绝）
+    if not hass.data.get(static_key):
+        hass.data[static_key] = True
+        try:
+            await hass.http.async_register_static_paths(
+                [StaticPathConfig(STATIC_URL, str(PANEL_JS), cache_headers=False)]
+            )
+        except RuntimeError as err:  # 已注册或 HTTP 已启动
+            LOGGER.warning("静态路径注册失败（面板 JS 可能 404）: %s", err)
 
     # 2) REST 接口
     for view in VIEWS:
-        hass.http.register_view(view)
+        try:
+            hass.http.register_view(view)
+        except Exception as err:  # noqa: BLE001 - 已注册则跳过
+            LOGGER.debug("REST 视图已存在: %s", err)
 
     # 3) 侧边栏面板
     try:
         await panel_custom.async_register_panel(
             hass,
             frontend_url_path=PANEL_URL_PATH,
-            webcomponent_name="hdl-link-provision",
+            webcomponent_name=PANEL_COMPONENT,
             sidebar_title="HDL 设备同步",
             sidebar_icon="mdi:swap-horizontal",
-            module_url=f"{STATIC_URL}/provision.js",
-            require_admin=True,
+            module_url=f"{STATIC_URL}/provision.js?v={PANEL_VERSION}",
+            require_admin=False,
             embed_iframe=False,
         )
+        LOGGER.info("已注册侧边栏面板 %s -> %s", PANEL_URL_PATH, f"{STATIC_URL}/provision.js")
     except Exception as err:  # noqa: BLE001 - 面板注册失败不影响服务
         LOGGER.warning("注册 HDL 设备同步面板失败: %s", err)
 
@@ -187,3 +202,4 @@ async def _async_setup_provision(hass: HomeAssistant) -> None:
 
 
 __all__ = ["async_setup_entry", "async_unload_entry", "CONF_GW_ID"]
+

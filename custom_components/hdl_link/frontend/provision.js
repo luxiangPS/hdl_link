@@ -41,8 +41,13 @@ class HdlLinkProvision extends HTMLElement {
   }
 
   async _boot() {
-    this._render();
-    await this._load();
+    try {
+      this._render();
+      await this._load();
+    } catch (err) {
+      this._scan = { error: "面板初始化失败：" + (err && err.message ? err.message : String(err)) };
+      this._render();
+    }
   }
 
   async _load() {
@@ -76,6 +81,7 @@ class HdlLinkProvision extends HTMLElement {
   }
 
   _selectionPayload() {
+    if (!this._scan || !Array.isArray(this._scan.devices)) return [];
     const devices = [];
     this._scan.devices.forEach((device) => {
       const sel = this._selected.get(device.device_id);
@@ -122,6 +128,17 @@ class HdlLinkProvision extends HTMLElement {
   }
 
   _render() {
+    try {
+      this._renderInner();
+    } catch (err) {
+      const msg = "面板渲染失败：" + (err && err.message ? err.message : String(err));
+      this.shadowRoot.innerHTML =
+        `<div style="padding:24px;font-family:sans-serif;color:#c62828">${escapeHtml(msg)}</div>`;
+      console.error("[hdl-link-provision]", err);
+    }
+  }
+
+  _renderInner() {
     const sr = this.shadowRoot;
     const scrollTop = sr.querySelector("#list") ? sr.querySelector("#list").scrollTop : 0;
     const scan = this._scan;
@@ -231,16 +248,17 @@ class HdlLinkProvision extends HTMLElement {
 
     sr.querySelector("#reload").onclick = () => this._load();
     sr.querySelector("#submit").onclick = () => this._submit();
+    const devList = (scan && Array.isArray(scan.devices)) ? scan.devices : [];
     sr.querySelectorAll("input.devcb").forEach((el) => {
       el.onchange = () => {
-        const device = scan.devices.find((d) => d.device_id === el.dataset.dev);
-        this._toggleDevice(device, el.checked);
+        const device = devList.find((d) => d.device_id === el.dataset.dev);
+        if (device) this._toggleDevice(device, el.checked);
       };
     });
     sr.querySelectorAll("input[data-ent]").forEach((el) => {
       el.onchange = () => {
-        const device = scan.devices.find((d) => d.device_id === el.dataset.dev);
-        this._toggleFunction(device, el.dataset.ent, el.checked);
+        const device = devList.find((d) => d.device_id === el.dataset.dev);
+        if (device) this._toggleFunction(device, el.dataset.ent, el.checked);
       };
     });
     sr.querySelectorAll("select[data-ent]").forEach((el) => {
