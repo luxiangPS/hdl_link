@@ -131,24 +131,36 @@ class HdlLinkProvision extends HTMLElement {
   // ---------------------------------------------------------------- 数据
   async _req(method, path, body) {
     const hass = this._hass;
-    const tok = hass && hass.auth && hass.auth.data ? hass.auth.data.access_token : null;
-    if (tok) {
-      const res = await fetch(`/api/${path}`, {
-        method,
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${tok}` },
-        body: body ? JSON.stringify(body) : undefined,
-      });
-      const text = await res.text();
-      let data = null;
+    // 优先用 HA 自己的 callApi：它走前端已建立的鉴权通道，token 失效/刷新都不用管
+    if (hass && typeof hass.callApi === "function") {
       try {
-        data = text ? JSON.parse(text) : null;
-      } catch (e) {
-        data = { error: text };
+        const data = await hass.callApi(method, path, body);
+        return data || {};
+      } catch (err) {
+        let msg = "";
+        if (err && typeof err === "object") {
+          msg = String(err.message || err.error || err.body || err.code || "");
+        }
+        throw new Error(msg || String(err) || "请求失败");
       }
-      if (!res.ok) throw new Error((data && (data.error || data.message)) || `HTTP ${res.status}`);
-      return data || {};
     }
-    return hass.callApi(method, path, body);
+    // 兜底：个别面板实现没给 callApi
+    const tok = hass && hass.auth && hass.auth.data ? hass.auth.data.access_token : null;
+    if (!tok) throw new Error("未取到登录令牌，请刷新页面后重试");
+    const res = await fetch(`/api/${path}`, {
+      method,
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${tok}` },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const text = await res.text();
+    let data = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch (e) {
+      data = { error: text };
+    }
+    if (!res.ok) throw new Error((data && (data.error || data.message)) || `HTTP ${res.status}`);
+    return data || {};
   }
 
   async _load() {
