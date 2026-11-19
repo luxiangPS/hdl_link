@@ -38,6 +38,125 @@ TOPIC_SCENE_EXECUTE: Final = "/user/{gw}/custom/scene/execute"
 TOPIC_PROPERTY_READ: Final = "/base/{gw}/thing/property/read"
 TOPIC_PROPERTY_DOWN: Final = "/base/{gw}/thing/property/down"
 
+# ------------------------------------------------------- 设备/功能 增删改（写入网关）
+# 对应 HDL《LINK主网关协议<->调试软件》：先开编辑开关，再增删改物理模型与功能点
+TOPIC_REMOTE_CONFIG_EDIT: Final = "/user/{gw}/custom/remoteconfig/edit"
+TOPIC_DEVICE_ADD: Final = "/user/{gw}/custom/device/add"
+TOPIC_DEVICE_DELETE: Final = "/user/{gw}/custom/device/delete"
+TOPIC_DEVICE_EDIT: Final = "/user/{gw}/custom/device/edit"
+TOPIC_FUNCTION_ADD: Final = "/user/{gw}/custom/function/attribute/add"
+TOPIC_FUNCTION_EDIT: Final = "/user/{gw}/custom/function/attribute/edit"
+TOPIC_FUNCTION_DELETE: Final = "/user/{gw}/custom/function/attribute/delete"
+TOPIC_TOPO_FOUND: Final = "/base/{gw}/thing/topo/found"
+
+# 驱动名：Buspro 驱动 / LINK(a) 驱动；写入第三方设备挂在 "a" 驱动下
+DRIVER_A: Final = "a"
+PROVISION_VERSION: Final = "2.2.0"
+STORAGE_KEY: Final = "hdl_link.provision"
+STORAGE_VERSION: Final = 1
+
+# 可供选择的功能类型（spk）与展示名：来自 SPK_PLATFORM，再补几个写入用的
+PROVISIONABLE_SPK: Final[tuple[str, ...]] = (
+    "light.switch",
+    "light.dimming",
+    "light.cct",
+    "light.rgb",
+    "light.rgbw",
+    "panel.socket",
+    "other.common",
+    "curtain.switch",
+    "curtain.trietex",
+    "curtain.roller",
+    "sensor.temperature",
+    "sensor.humidity",
+    "sensor.light",
+    "sensor.co2",
+    "sensor.pm25",
+    "sensor.pir",
+    "sensor.doorwindow",
+)
+
+# 每个 spk 需要的属性定义（写入 function/attribute/add 的 attributes）
+SPK_ATTRIBUTE_SCHEMA: Final[dict[str, list[dict[str, str]]]] = {
+    "light.switch": [{"key": "on_off", "data_type": "boolean"}],
+    "light.dimming": [
+        {"key": "on_off", "data_type": "boolean"},
+        {"key": "brightness", "data_type": "int", "min": "0", "max": "100"},
+    ],
+    "light.cct": [
+        {"key": "on_off", "data_type": "boolean"},
+        {"key": "brightness", "data_type": "int", "min": "0", "max": "100"},
+        {"key": "color_temp", "data_type": "int", "min": "2700", "max": "6500"},
+    ],
+    "light.rgb": [
+        {"key": "on_off", "data_type": "boolean"},
+        {"key": "brightness", "data_type": "int", "min": "0", "max": "100"},
+        {"key": "rgb", "data_type": "string"},
+    ],
+    "light.rgbw": [
+        {"key": "on_off", "data_type": "boolean"},
+        {"key": "brightness", "data_type": "int", "min": "0", "max": "100"},
+        {"key": "rgb", "data_type": "string"},
+        {"key": "white", "data_type": "int", "min": "0", "max": "100"},
+    ],
+    "panel.socket": [{"key": "on_off", "data_type": "boolean"}],
+    "other.common": [{"key": "on_off", "data_type": "boolean"}],
+    "curtain.switch": [{"key": "on_off", "data_type": "boolean"}],
+    "curtain.trietex": [{"key": "position", "data_type": "int", "min": "0", "max": "100"}],
+    "curtain.roller": [{"key": "position", "data_type": "int", "min": "0", "max": "100"}],
+    "sensor.temperature": [{"key": "temperature", "data_type": "float", "min": "-40", "max": "120"}],
+    "sensor.humidity": [{"key": "humidity", "data_type": "float", "min": "0", "max": "100"}],
+    "sensor.light": [{"key": "illuminance", "data_type": "float", "min": "0", "max": "100000"}],
+    "sensor.co2": [{"key": "co2", "data_type": "float", "min": "0", "max": "5000"}],
+    "sensor.pm25": [{"key": "pm25", "data_type": "float", "min": "0", "max": "1000"}],
+    "sensor.pir": [{"key": "people_status", "data_type": "boolean"}],
+    "sensor.doorwindow": [{"key": "door_status", "data_type": "boolean"}],
+}
+
+# 扫描时跳过的域（系统/不可控，写进 HDL 没有意义）
+SCAN_SKIP_DOMAINS: Final[frozenset[str]] = frozenset(
+    {
+        "update",
+        "persistent_notification",
+        "person",
+        "sun",
+        "zone",
+        "tag",
+        "tts",
+        "stt",
+        "conversation",
+        "assist_satellite",
+        "notify",
+        "event",
+        "todo",
+        "device_tracker",
+        "weather",
+        "number",
+        "select",
+        "text",
+        "time",
+        "date",
+        "datetime",
+        "image",
+    }
+)
+
+# 扫描时纳入的域（顺序即 UI 展示顺序）
+SCAN_DOMAINS: Final[tuple[str, ...]] = (
+    "light",
+    "switch",
+    "cover",
+    "climate",
+    "fan",
+    "media_player",
+    "water_heater",
+    "humidifier",
+    "lock",
+    "vacuum",
+    "sensor",
+    "binary_sensor",
+)
+
 SIGNAL_UPDATE: Final = f"{DOMAIN}_update"
 
 # ------------------------------------------------------------------ 类型映射
@@ -131,3 +250,4 @@ READ_BATCH: Final = 40        # 单次 property/read 携带的 sid 上限
 CONNECT_TIMEOUT: Final = 12
 SCAN_CONCURRENCY: Final = 64  # 网段扫描并发
 SCAN_TIMEOUT: Final = 2.0     # 单机探测超时（跨 NAT / 跨网段时需要更宽裕）
+

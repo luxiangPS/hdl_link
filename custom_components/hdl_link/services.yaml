@@ -1,0 +1,34 @@
+scan:
+  name: 扫描 HA 设备
+  description: 扫描 HA 中可同步的设备与功能（排除 HDL LINK 自有设备），返回设备、功能与建议的 HDL 功能类型。
+  fields:
+    entry_id:
+      name: 配置条目
+      description: 多网关时指定某个 HDL LINK 配置条目，仅用于标记返回结果。
+      example: 01JABCDEF
+      selector:
+        text:
+
+provision:
+  name: 同步设备到 HDL 网关
+  description: 把勾选的 HA 设备写成 HDL 物理模型（oid 由网关自动生成），并把勾选的功能写成功能点（sid = oid + 两位序号）。
+  fields:
+    devices:
+      name: 设备与功能
+      description: 设备数组，每项包含 device_id、name、model 与 functions（entity_id、name、spk）。
+      required: true
+      example: '[{"device_id":"abc","name":"客厅灯","model":"米家吸顶灯","functions":[{"entity_id":"light.keting","name":"客厅灯","spk":"light.dimming"}]}]'
+      selector:
+        object:
+    dry_run:
+      name: 演练模式
+      description: 开启时只返回写入计划，不真正写网关。
+      default: true
+      selector:
+        boolean:
+    entry_id:
+      name: 配置条目
+      description: 多网关时指定目标网关。
+      example: 01JABCDEF
+      selector:
+        text:
