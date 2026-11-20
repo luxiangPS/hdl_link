@@ -146,3 +146,42 @@ tools/live_check.py 现场自检脚本
 
 - 问题与需求：本仓库 Issues
 - 版本记录见 Releases / 提交历史
+
+---
+
+## 11. HDL → HA：用场景事件做反向控制
+
+网关**不会**把控制指令下发给 LINK 客户端（实测 `property/down` 只路由给驱动，客户端收不到），
+所以反向控制只能用网关已有的上行通道：**HDL 场景执行事件**。
+
+实测：执行 LINK 场景后，网关会推
+
+```
+/user/{gw}/custom/scene/status/up      # 场景执行
+/user/{gw}/custom/logic/status/up      # 逻辑动作
+/base/{gw}/thing/property/up           # 受影响设备的状态变化
+```
+
+这些帧和属性上报一样是 AES-128-CBC（key = iv = 本地密钥），所以**必须配置本地密钥**才能解析。
+解析成功后集成会触发事件 `hdl_link_hdl_event`：
+
+```yaml
+# 自动化示例：HDL 面板按下「回家」场景 → 打开 HA 里的米家灯
+alias: HDL 场景触发 HA 动作
+trigger:
+  - platform: event
+    event_type: hdl_link_hdl_event
+    event_data:
+      kind: scene
+      name: 回家走廊灯
+action:
+  - service: light.turn_on
+    target:
+      entity_id: light.keting
+```
+
+在 HDL 侧把面板按键绑定到该场景（面板绑定命令），面板按键就变成「HA 遥控器」，
+延迟通常 1 秒内。
+
+要真正的实时下行控制（网关把控制直接送到 HA 端），需要网关侧有一个注册驱动接收
+`property/down`（`driver_name` + 驱动配置表），当前开源集成做不到这一步。

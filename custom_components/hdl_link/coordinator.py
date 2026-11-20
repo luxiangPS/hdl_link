@@ -98,6 +98,7 @@ class HdlCoordinator(DataUpdateCoordinator[dict[str, dict[str, str]]]):
     async def async_connect(self) -> None:
         # 网关主动上报（已解密）直接并入实体状态；默认不轮询，只在启动与手动刷新时读取全量
         self.gateway.client.push_handler = self._on_push
+        self.gateway.client.event_handler = self._on_event
         info = await self.gateway.async_connect()
         if info and info.oid:
             self.gw_id = info.oid
@@ -132,6 +133,31 @@ class HdlCoordinator(DataUpdateCoordinator[dict[str, dict[str, str]]]):
             changed = True
         if changed:
             self.async_set_updated_data(data)
+
+    def _on_event(self, topic: str, body: dict[str, Any]) -> None:
+        """HDL 侧动作事件（场景执行 / 逻辑动作）。
+
+        这是 HDL → HA 唯一可用的上行通道：网关执行场景时会推
+        `/user/{gw}/custom/scene/status/up`（本地加密），HA 收到后触发
+        `hdl_link_hdl_event` 事件，由用户在自动化里决定要控哪些 HA 设备。
+        """
+        objects = body.get("objects")
+        items = objects if isinstance(objects, list) else ([objects] if isinstance(objects, dict) else [])
+        hass = getattr(self, "hass", None)
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            payload = {
+                "gateway": self.gw_id or "",
+                "kind": "scene" if "scene" in topic else "logic",
+                "sid": str(item.get("sid") or item.get("id") or ""),
+                "name": item.get("name") or "",
+                "status": str(item.get("status") or ""),
+                "raw": item,
+            }
+            LOGGER.debug("HDL 事件: %s", payload)
+            if hass is not None:
+                hass.bus.async_fire(f"{DOMAIN}_hdl_event", payload)
 
     # ------------------------------------------------------------------ 轮询
     async def _async_update_data(self) -> dict[str, dict[str, str]]:

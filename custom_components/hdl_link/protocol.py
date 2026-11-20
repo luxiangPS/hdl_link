@@ -23,6 +23,12 @@ LOGGER = logging.getLogger(__name__)
 _HEADER = re.compile(rb"Topic:(.*?)\r\nLength:\s*(\d+)\r\n\r\n")
 _PORT = 8586
 _UP_SUFFIX = "/thing/property/up"
+# HDL 侧动作事件：场景执行、逻辑/按键动作，实测都会以加密帧推到客户端
+_EVENT_SUFFIXES = ("/custom/scene/status/up", "/custom/logic/status/up")
+
+
+def _is_event_topic(topic: str) -> bool:
+    return any(topic.endswith(suffix) for suffix in _EVENT_SUFFIXES)
 
 
 def decrypt_up_frame(raw: bytes, secret: str) -> dict[str, Any] | None:
@@ -101,6 +107,8 @@ class LinkClient:
         self.local_secret = (local_secret or "").strip() or None
         # 网关主动上报（已解密）的回调：objects 列表
         self.push_handler: Callable[[list[dict[str, Any]]], None] | None = None
+        # HDL 侧动作事件（场景执行 / 逻辑动作）回调，签名 (topic, body)
+        self.event_handler: Callable[[str, dict[str, Any]], None] | None = None
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
         self._reader_task: asyncio.Task[None] | None = None
@@ -182,15 +190,24 @@ class LinkClient:
 
         if body is None:
             # 网关主动上报为本地加密二进制，用配置的本地密钥解密后再当明文处理
-            if topic.endswith(_UP_SUFFIX) and self.local_secret:
+            if (topic.endswith(_UP_SUFFIX) or _is_event_topic(topic)) and self.local_secret:
                 body = decrypt_up_frame(raw, self.local_secret)
                 if body is None:
                     LOGGER.debug("上报帧解密失败，长度 %d", len(raw))
                     return
             else:
-                if topic.endswith(_UP_SUFFIX):
-                    LOGGER.debug("收到加密上报但未配置本地密钥，跳过")
+                if topic.endswith(_UP_SUFFIX) or _is_event_topic(topic):
+                    LOGGER.debug("收到加密上报但未配置本地密钥，跳过: %s", topic)
                 return
+
+        # HDL 侧动作事件（场景执行等）：交给事件回调，不当成属性上报
+        if _is_event_topic(topic):
+            if self.event_handler is not None:
+                try:
+                    self.event_handler(topic, body)
+                except Exception as err:  # noqa: BLE001 - 回调异常不能影响读线程
+                    LOGGER.debug("处理事件失败: %s", err)
+            return
 
         msg_id = body.get("id")
         fut = self._pending.get(str(msg_id)) if msg_id is not None else None
