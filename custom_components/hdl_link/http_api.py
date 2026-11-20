@@ -76,7 +76,13 @@ class HdlProvisionView(HomeAssistantView):
         if not devices:
             return self.json_message("没有勾选任何设备", status_code=400)
 
-        dry_run = bool(body.get("dry_run", True))
+        # 默认就是真写：只有显式 dry_run=true 才只生成计划
+        dry_run = bool(body.get("dry_run", False))
+        if not dry_run and not body.get("confirm"):
+            return self.json_message(
+                "写入网关需要二次确认：请带上 confirm=true（面板会弹窗确认后自动带上）",
+                status_code=400,
+            )
         try:
             result = await async_provision(hass, coordinator, {"devices": devices}, dry_run=dry_run)
         except Exception as err:  # noqa: BLE001

@@ -101,7 +101,8 @@ class HdlLinkProvision extends HTMLElement {
     this._query = "";
     this._filter = "all"; // all | control | sensor | unsupported
     this._showSystem = false;
-    this._dryRun = true;
+    this._gatewayLabel = "HDL 网关";
+    this._dryRun = false;
     this._checked = new Map(); // entity_id -> spk
     this._renderQueued = false;
     // 面板本地偏好：收起的设备、被手动移除的不可用功能（只影响展示，不写入网关）
@@ -353,6 +354,26 @@ class HdlLinkProvision extends HTMLElement {
   async _run() {
     const devices = this._selectionPayload();
     if (!devices.length) return;
+    if (!this._dryRun) {
+      const funcCount = devices.reduce((n, d) => n + ((d.functions || []).length), 0);
+      const ok = await this._confirm(
+        "确认写入 HDL 网关？",
+        `<div style="line-height:1.8">
+           即将向 <b>${escapeHtml(this._gatewayLabel || "HDL 网关")}</b> 写入
+           <b style="color:#c62828">${devices.length}</b> 个物理模块、
+           <b style="color:#c62828">${funcCount}</b> 个功能点。
+           <div style="margin-top:10px;color:#666;font-size:13px">
+             写入后这些 HA 设备会以「HA」为名出现在 HDL 侧，可在 HDL 面板 / 场景 / 按键里绑定控制。
+             重复写入同一条功能点会做幂等处理，不会重复创建。
+           </div>
+         </div>`
+      );
+      if (!ok) {
+        this._result = { dry_run: true, plan: [], errors: ["已取消写入"] };
+        this._render();
+        return;
+      }
+    }
     this._busy = true;
     this._result = null;
     this._render();
@@ -360,13 +381,46 @@ class HdlLinkProvision extends HTMLElement {
       const res = await this._req("POST", "hdl_link/provision", {
         devices,
         dry_run: this._dryRun,
+        confirm: !this._dryRun,
       });
       this._result = res || {};
     } catch (err) {
-      this._result = { errors: [String(err && err.message ? err.message : err)] };
+      this._result = { errors: [String(err && err.message ? err.message : String(err))] };
     }
     this._busy = false;
     this._render();
+  }
+
+  /** 面板内二次确认弹窗（不依赖浏览器原生 confirm） */
+  _confirm(title, html) {
+    return new Promise((resolve) => {
+      const mask = document.createElement("div");
+      mask.style.cssText =
+        "position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:99999;display:flex;" +
+        "align-items:center;justify-content:center;font-family:inherit";
+      mask.innerHTML = `
+        <div style="background:#fff;border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,.3);
+                    width:min(460px,90vw);padding:22px 24px">
+          <div style="font-size:17px;font-weight:600;margin-bottom:12px">${escapeHtml(title)}</div>
+          <div style="font-size:14px;color:#333">${html}</div>
+          <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:20px">
+            <button id="cn" style="padding:8px 16px;border-radius:8px;border:1px solid #ddd;
+                    background:#fff;cursor:pointer;font-size:14px">取消</button>
+            <button id="ok" style="padding:8px 16px;border-radius:8px;border:0;
+                    background:#2563eb;color:#fff;cursor:pointer;font-size:14px;font-weight:600">确认写入</button>
+          </div>
+        </div>`;
+      this.shadowRoot.appendChild(mask);
+      const done = (val) => {
+        mask.remove();
+        resolve(val);
+      };
+      mask.querySelector("#cn").addEventListener("click", () => done(false));
+      mask.querySelector("#ok").addEventListener("click", () => done(true));
+      mask.addEventListener("click", (e) => {
+        if (e.target === mask) done(false);
+      });
+    });
   }
 
   async _showToast(msg) {
@@ -541,7 +595,7 @@ class HdlLinkProvision extends HTMLElement {
 
       <div class="bar">
         <label class="toggle"><input type="checkbox" id="dry" ${this._dryRun ? "checked" : ""}> 先预览，不写网关</label>
-        <span class="note" id="dryTip">${this._dryRun ? "只生成写入计划，便于核对 oid / 功能类型" : "将真实写入 HDL 网关，网关不可达时会明确报错"}</span>
+        <span class="note" id="dryTip">${this._dryRun ? "只生成写入计划，便于核对 oid / 功能类型" : "点击后会弹窗二次确认，确认后才真正写入网关"}</span>
         <div class="spacer"></div>
         <span class="sum">已选 <b>${counts2.devices}</b> 台 · <b>${counts2.functions}</b> 个功能</span>
         <button class="btn primary" id="run" ${hasSel && !this._busy ? "" : "disabled"}>
