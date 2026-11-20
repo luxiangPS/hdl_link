@@ -50,6 +50,16 @@ def main():
     lk._dispatch("/user/1/custom/scene/status/up", b"\xfaW\x94\xc5" * 8)
     check("加密帧被安全跳过", events == [], events)
 
+    print("[5] 网关下发 down：进事件回调（kind=down），不进 push")
+    events.clear()
+    pushes.clear()
+    lk._dispatch("/base/010105003DF6F100/thing/property/down",
+                 json.dumps({"objects": [{"sid": "0AD7B7738EDD83BC020100010101",
+                                          "status": [{"key": "on_off", "value": "off"}]}]}).encode())
+    check("down 交给事件回调", events and len(events) == 1, events)
+    check("down 标记为 kind=down", events and events[0][1].get("kind") == "down", events)
+    check("down 不进 push_handler", pushes == [], pushes)
+
     print("\n结果：%d 项失败" % len(FAILED))
     return 1 if FAILED else 0
 

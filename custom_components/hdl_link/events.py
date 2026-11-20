@@ -150,8 +150,8 @@ async def async_handle(
             continue
         status = normalize_status(obj.get("status"))
         values = {item["key"]: item["value"] for item in status}
-        if sid in own:
-            # 我们自己注册进网关的 HA 设备：状态由协调器刷新，不参与绑定判断
+        if kind != "down" and sid in own:
+            # 上行属性：我们自己注册进网关的 HA 设备由协调器刷新，不参与绑定判断
             continue
         if _remember(data, sid, values, kind):
             dirty = True
@@ -159,11 +159,19 @@ async def async_handle(
             continue
 
         rule = data["sids"].get(sid)
+        if rule is None and kind == "down":
+            # 网关下发来的是我们自己注册的功能点 sid：直接用 provision 映射自动执行
+            from .provision import async_entity_for_sid
+
+            auto = await async_entity_for_sid(hass, sid)
+            if auto:
+                rule = {"entity_id": auto.get("entity_id"), "spk": auto.get("spk"),
+                        "mode": "follow", "trigger": "any"}
         if not rule:
             continue
 
         key = ";".join(sorted(f"{k}={v}" for k, v in values.items()))
-        if data["state"].get(sid) == key:
+        if kind != "down" and data["state"].get(sid) == key:
             # 同一份 status 已经下发过，重复上报（含自己发 up 的回环）不再执行
             continue
         data["state"][sid] = key

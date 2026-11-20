@@ -375,3 +375,13 @@ async def async_mapping(hass: HomeAssistant) -> dict[str, Any]:
         return data.get("mapping", {}) if isinstance(data, dict) else {}
     except Exception:  # noqa: BLE001
         return {}
+
+
+async def async_entity_for_sid(hass: HomeAssistant, sid: str) -> dict[str, Any] | None:
+    """sid 反查实体：网关下发的 down 里只有 sid，用它找 entity_id / spk。"""
+    mapping = await async_mapping(hass)
+    for entity_id, info in mapping.items():
+        if str(info.get("sid") or "") == sid:
+            return {"entity_id": entity_id, "spk": info.get("spk") or "",
+                    "oid": info.get("oid"), "name": info.get("name")}
+    return None
