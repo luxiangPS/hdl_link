@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -124,15 +125,31 @@ async def async_set_mapping(
 
 
 def _remember(data: dict[str, Any], sid: str, values: dict[str, str], kind: str) -> bool:
-    """把收到过的功能点记进 seen（前端下拉挑 sid 用），返回是否有变化。"""
+    """把收到过的功能点记进 seen（前端下拉挑 sid 用），返回是否有变化。
+
+    同一条会累计 ``count`` 并更新 ``last_at``（Unix 秒），面板上用来判断
+    「面板按键到底有没有把事件送到 HA」——这是场景桥/按键桥现场自检的核心依据。
+    """
     seen = data["seen"]
     snapshot = ";".join(f"{k}={v}" for k, v in sorted(values.items()))
+    now = int(time.time())
     for item in seen:
         if item.get("sid") == sid:
             item["last_status"] = snapshot or item.get("last_status") or ""
             item["kind"] = kind or item.get("kind") or ""
+            item["last_at"] = now
+            item["count"] = int(item.get("count") or 0) + 1
             return False
-    seen.append({"sid": sid, "name": "", "kind": kind, "last_status": snapshot})
+    seen.append(
+        {
+            "sid": sid,
+            "name": "",
+            "kind": kind,
+            "last_status": snapshot,
+            "last_at": now,
+            "count": 1,
+        }
+    )
     return True
 
 
@@ -256,7 +273,11 @@ async def async_bindings(hass: HomeAssistant) -> dict[str, Any]:
     }
 
 
-def join_scene_bindings(scenes: list[dict[str, Any]], binds: dict[str, Any]) -> dict[str, Any]:
+def join_scene_bindings(
+    scenes: list[dict[str, Any]],
+    binds: dict[str, Any],
+    seen: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """把网关场景清单和本地绑定表拼成一张排查表（纯函数，便于自测）。
 
     输出三件事：
@@ -264,22 +285,7 @@ def join_scene_bindings(scenes: list[dict[str, Any]], binds: dict[str, Any]) -> 
     - unbound：网关有、但 HA 完全没绑的场景名（面板按了不可能有反应）；
     - orphan_bindings：HA 绑了、但网关里已经没有的 sid（绑了但永远不触发）。
     """
-    items: list[dict[str, Any]] = []
-    for scene in scenes or []:
-        sid = str(scene.get("sid") or "")
-        rule = (binds or {}).get(sid) or {}
-        items.append(
-            {
-                "sid": sid,
-                "name": scene.get("name"),
-                "status": scene.get("status"),
-                "bound": bool(rule),
-                "entity_id": rule.get("entity_id"),
-                "mode": rule.get("mode"),
-                "action": rule.get("action"),
-                "trigger": rule.get("trigger"),
-            }
-        )
+    items = [_bridge_row(scene, binds, seen) for scene in scenes or []]
     gateway_sids = {item["sid"] for item in items}
     orphan = [
         {"sid": sid, "entity_id": (rule or {}).get("entity_id")}
@@ -291,5 +297,82 @@ def join_scene_bindings(scenes: list[dict[str, Any]], binds: dict[str, Any]) -> 
         "bound": sum(1 for item in items if item["bound"]),
         "unbound": [item["name"] for item in items if not item["bound"]],
         "scenes": items,
+        "orphan_bindings": orphan,
+    }
+
+
+def _event_stats(sid: str, seen: list[dict[str, Any]] | None) -> dict[str, Any]:
+    for item in seen or []:
+        if item.get("sid") == sid:
+            return {
+                "last_at": item.get("last_at"),
+                "count": int(item.get("count") or 0),
+                "last_status": item.get("last_status") or "",
+                "kind": item.get("kind") or "",
+            }
+    return {"last_at": None, "count": 0, "last_status": "", "kind": ""}
+
+
+def _bridge_row(
+    src: dict[str, Any],
+    binds: dict[str, Any],
+    seen: list[dict[str, Any]] | None,
+    source: str = "scene",
+) -> dict[str, Any]:
+    sid = str(src.get("sid") or "")
+    rule = (binds or {}).get(sid) or {}
+    stats = _event_stats(sid, seen)
+    return {
+        "sid": sid,
+        "name": src.get("name"),
+        "status": src.get("status"),
+        "source": source,
+        "oid": src.get("oid"),
+        "omodel": src.get("omodel"),
+        "spk": src.get("spk"),
+        "online": src.get("online", True),
+        "bound": bool(rule),
+        "entity_id": rule.get("entity_id"),
+        "mode": rule.get("mode"),
+        "action": rule.get("action"),
+        "trigger": rule.get("trigger"),
+        "last_at": stats["last_at"],
+        "count": stats["count"],
+        "last_status": stats["last_status"],
+    }
+
+
+def join_bridge_rows(
+    scenes: list[dict[str, Any]],
+    functions: list[dict[str, Any]],
+    binds: dict[str, Any],
+    seen: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """「按键桥」面板的数据源：场景 + 可绑定的真实功能点 + 绑定状态 + 事件统计。
+
+    ``functions`` 里每条是网关 ``function/list/get`` 的对象（sid/name/oid/omodel/spk）。
+    纯函数：不碰网关、不碰存储，方便单测和前端反复刷新。
+    """
+    rows = [_bridge_row(scene, binds, seen, "scene") for scene in scenes or []]
+    rows += [_bridge_row(fn, binds, seen, "function") for fn in functions or []]
+    gateway_sids = {row["sid"] for row in rows}
+    orphan = [
+        {"sid": sid, "entity_id": (rule or {}).get("entity_id")}
+        for sid, rule in (binds or {}).items()
+        if sid not in gateway_sids
+    ]
+    bound_rows = [row for row in rows if row["bound"]]
+    fired_rows = [row for row in rows if row["count"]]
+    return {
+        "rows": rows,
+        "counts": {
+            "total": len(rows),
+            "scenes": sum(1 for row in rows if row["source"] == "scene"),
+            "functions": sum(1 for row in rows if row["source"] == "function"),
+            "bound": len(bound_rows),
+            "unbound": len(rows) - len(bound_rows),
+            "fired": len(fired_rows),
+        },
+        "unbound": [row["name"] for row in rows if not row["bound"]],
         "orphan_bindings": orphan,
     }

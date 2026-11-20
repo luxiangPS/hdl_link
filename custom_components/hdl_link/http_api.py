@@ -257,11 +257,93 @@ class HdlEventMapView(HdlBindingView):
     name = "api:hdl_link:event_map"
 
 
+class HdlBridgeView(HomeAssistantView):
+    """GET/POST /api/hdl_link/bridge —— 「按键桥」面板数据 + 一键绑定。
+
+    GET  → {"rows": [...], "counts": {...}, "unbound": [...], "orphan_bindings": [...]}
+            rows 同时包含网关里的**场景**（source=scene）与**真实功能点**（source=function），
+            每行带绑定状态与「最近一次事件时间/次数」，用来判断面板按键到底有没有到达 HA。
+    POST → {"sid", "entity_id"（null=解绑）, "mode":"follow|action", "action", "trigger"}
+    """
+
+    url = "/api/hdl_link/bridge"
+    name = "api:hdl_link:bridge"
+    requires_auth = True
+
+    async def get(self, request: web.Request) -> web.Response:
+        hass: HomeAssistant = request.app["hass"]
+        from .events import async_bindings, join_bridge_rows
+
+        coordinator = _coordinator(hass, request.query.get("entry_id"))
+        if coordinator is None:
+            return self.json_message("HDL LINK 尚未配置", status_code=400)
+        try:
+            scenes = await coordinator.gateway.async_scenes()
+        except Exception as err:  # noqa: BLE001 - 读场景失败不能连累功能点
+            LOGGER.warning("读取 HDL 场景失败: %s", err)
+            scenes = []
+        try:
+            functions = [
+                row
+                for row in (_function_row(fn) for fn in await coordinator.gateway.async_functions())
+                if row["sid"] and not row["omodel"].upper().startswith("HA")
+            ]
+        except Exception as err:  # noqa: BLE001
+            LOGGER.warning("读取 HDL 功能点失败: %s", err)
+            functions = []
+        data = await async_bindings(hass)
+        result = join_bridge_rows(scenes, functions, data.get("sids") or {}, data.get("seen") or [])
+        result["gateway"] = {"gw_id": coordinator.gw_id, "host": coordinator.gateway.host}
+        return self.json(result)
+
+    async def post(self, request: web.Request) -> web.Response:
+        hass: HomeAssistant = request.app["hass"]
+        from .events import async_bindings, async_set_mapping
+
+        try:
+            body = await request.json()
+        except ValueError:
+            return self.json_message("请求体必须是 JSON", status_code=400)
+        coordinator = _coordinator(hass, body.get("entry_id"))
+        if coordinator is None:
+            return self.json_message("HDL LINK 尚未配置", status_code=400)
+        result = await async_set_mapping(
+            hass,
+            str(body.get("sid") or ""),
+            entity_id=body.get("entity_id"),
+            mode=str(body.get("mode") or "action"),
+            action=str(body.get("action") or "toggle"),
+            trigger=str(body.get("trigger") or "any"),
+            spk=body.get("spk"),
+            name=body.get("name"),
+        )
+        if not result.get("ok"):
+            return self.json(result, status_code=400)
+        data = await async_bindings(hass)
+        rules = data.get("sids") or {}
+        rule = rules.get(str(body.get("sid") or "")) or {}
+        return self.json({"ok": True, "sid": body.get("sid"), "rule": rule})
+
+
+def _function_row(fn: Any) -> dict[str, Any]:
+    """网关功能点 → 桥接表行（只保留真实设备，排除本集成自己写进去的 HA 虚拟点）。"""
+    omodel = str(getattr(fn, "omodel", "") or "")
+    return {
+        "sid": str(getattr(fn, "sid", "") or ""),
+        "name": str(getattr(fn, "name", "") or ""),
+        "oid": str(getattr(fn, "oid", "") or ""),
+        "omodel": omodel,
+        "spk": str(getattr(fn, "spk", "") or ""),
+        "online": bool(getattr(fn, "online", True)),
+    }
+
+
 VIEWS = (
     HdlScanView(),
     HdlProvisionView(),
     HdlMappingView(),
     HdlBindingView(),
+    HdlBridgeView(),
     HdlEventMapView(),
     HdlDriverDevicesView(),
     HdlDriverDownView(),

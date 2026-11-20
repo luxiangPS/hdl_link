@@ -48,7 +48,7 @@ PANEL_URL_PATH = "hdl-device-sync"
 PANEL_COMPONENT = "hdl-link-provision"
 STATIC_URL = "/hdl_link_static"
 PANEL_JS = Path(__file__).parent / "frontend"
-PANEL_VERSION = "2.8.8"
+PANEL_VERSION = "2.8.9"
 
 SERVICE_SCAN = "scan"
 SERVICE_PROVISION = "provision"
@@ -271,8 +271,8 @@ async def _async_setup_provision(hass: HomeAssistant) -> None:
         if coordinator is None:
             raise ValueError("HDL LINK 尚未配置")
         scenes = await coordinator.gateway.async_scenes()
-        binds = (await async_bindings(hass)).get("sids") or {}
-        return join_scene_bindings(scenes, binds)
+        data = await async_bindings(hass)
+        return join_scene_bindings(scenes, data.get("sids") or {}, data.get("seen") or [])
 
     if not hass.services.has_service(DOMAIN, SERVICE_SCENE_LIST):
         hass.services.async_register(
@@ -294,6 +294,7 @@ async def _async_setup_provision(hass: HomeAssistant) -> None:
 
 
 __all__ = ["async_setup_entry", "async_unload_entry", "CONF_GW_ID"]
+
 
 
 

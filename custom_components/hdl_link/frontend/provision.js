@@ -105,6 +105,12 @@ class HdlLinkProvision extends HTMLElement {
     this._dryRun = false;
     this._checked = new Map(); // entity_id -> spk
     this._renderQueued = false;
+    // 页签：provision = 设备同步 / bridge = 按键桥（面板 → HA）
+    this._tab = "provision";
+    this._bridge = null;
+    this._bridgeBusy = false;
+    this._bridgeError = "";
+    this._bridgeQuery = "";
     // 面板本地偏好：收起的设备、被手动移除的不可用功能（只影响展示，不写入网关）
     this._collapsed = new Set();
     this._removed = new Set();
@@ -210,6 +216,84 @@ class HdlLinkProvision extends HTMLElement {
     }
     this._busy = false;
     this._render();
+  }
+
+  // ---------------------------------------------------------------- 按键桥（面板 → HA）
+  async _loadBridge() {
+    this._bridgeBusy = true;
+    this._bridgeError = "";
+    this._render();
+    try {
+      const data = await this._req("GET", "hdl_link/bridge");
+      this._bridge = data && Array.isArray(data.rows) ? data : null;
+      if (!this._bridge) this._bridgeError = "返回结构异常";
+    } catch (err) {
+      this._bridgeError = String(err && err.message ? err.message : err);
+    }
+    this._bridgeBusy = false;
+    this._render();
+  }
+
+  /** 行内的「绑定」：sid → HA 实体 */
+  async _bindRow(sid, entityId, mode, action) {
+    try {
+      this._bridgeBusy = true;
+      this._render();
+      await this._req("POST", "hdl_link/bridge", {
+        sid,
+        entity_id: entityId,
+        mode,
+        action,
+        trigger: "any",
+      });
+      await this._loadBridge();
+    } catch (err) {
+      this._bridgeBusy = false;
+      this._bridgeError = String(err && err.message ? err.message : err);
+      this._render();
+    }
+  }
+
+  /** 行内「解绑」 */
+  async _unbindRow(sid) {
+    try {
+      this._bridgeBusy = true;
+      this._render();
+      await this._req("POST", "hdl_link/bridge", { sid, entity_id: null });
+      await this._loadBridge();
+    } catch (err) {
+      this._bridgeBusy = false;
+      this._bridgeError = String(err && err.message ? err.message : err);
+      this._render();
+    }
+  }
+
+  /** 可绑定实体下拉数据（light/switch/cover/script…） */
+  _entityIds() {
+    const hass = this._hass;
+    const states = hass && hass.states ? hass.states : {};
+    const okDomains = [
+      "light", "switch", "cover", "fan", "climate", "media_player", "script",
+      "automation", "input_boolean", "scene", "button", "number", "lock", "vacuum",
+    ];
+    const ids = [];
+    for (const id of Object.keys(states)) {
+      const dot = id.indexOf(".");
+      if (dot < 0) continue;
+      if (!okDomains.includes(id.slice(0, dot))) continue;
+      ids.push(id);
+    }
+    ids.sort();
+    return ids;
+  }
+
+  _relTime(ts) {
+    if (!ts) return "—";
+    const diff = Math.max(0, Math.round(Date.now() / 1000 - Number(ts)));
+    if (diff < 60) return `${diff} 秒前`;
+    if (diff < 3600) return `${Math.round(diff / 60)} 分钟前`;
+    if (diff < 86400) return `${Math.round(diff / 3600)} 小时前`;
+    return `${Math.round(diff / 86400)} 天前`;
   }
 
   /** 扫描结果变了以后，丢掉已经不存在的勾选 */
@@ -444,7 +528,28 @@ class HdlLinkProvision extends HTMLElement {
     });
   }
 
+  _tabsStyle() {
+    return `<style>
+      .tabs { display:flex; gap:6px; margin-bottom:16px; border-bottom:1px solid var(--divider-color,#dcdfe3); }
+      .tab { padding:9px 16px; font-size:14px; cursor:pointer; border:none; background:transparent;
+             color:var(--secondary-text-color,#6b6b70); border-bottom:2px solid transparent; margin-bottom:-1px; }
+      .tab[data-active="1"] { color:var(--primary-color,#03a9f4); font-weight:600; border-bottom-color:var(--primary-color,#03a9f4); }
+    </style>`;
+  }
+
+  _tabsHtml() {
+    return `${this._tabsStyle()}
+      <div class="tabs">
+        <button class="tab" data-tab="provision" data-active="${this._tab === "provision" ? 1 : 0}">设备同步</button>
+        <button class="tab" data-tab="bridge" data-active="${this._tab === "bridge" ? 1 : 0}">按键桥（面板 → HA）</button>
+      </div>`;
+  }
+
   _renderInner() {
+    if (this._tab === "bridge") {
+      this._renderBridgeInner();
+      return;
+    }
     const counts = this._counts();
     const scan = this._scan;
     const devices = this._visibleDevices();
@@ -553,6 +658,7 @@ class HdlLinkProvision extends HTMLElement {
 
     this.shadowRoot.innerHTML = `${style}
       <div class="wrap">
+        ${this._tabsHtml()}
         <div class="head">
           <div>
             <h2>HDL 设备同步</h2>
@@ -604,6 +710,238 @@ class HdlLinkProvision extends HTMLElement {
       </div>`;
 
     this._bind();
+  }
+
+  // ---------------------------------------------------------------- 按键桥页签
+  _renderBridgeInner() {
+    const data = this._bridge;
+    const counts = (data && data.counts) || { total: 0, scenes: 0, functions: 0, bound: 0, unbound: 0, fired: 0 };
+    const q = (this._bridgeQuery || "").trim().toLowerCase();
+    const all = (data && data.rows) || [];
+    const rows = all.filter(
+      (r) =>
+        !q ||
+        String(r.name || "").toLowerCase().includes(q) ||
+        String(r.sid || "").toLowerCase().includes(q) ||
+        String(r.entity_id || "").toLowerCase().includes(q)
+    );
+    const orphan = (data && data.orphan_bindings) || [];
+    const entityOptions = this._entityIds()
+      .map((id) => `<option value="${escapeHtml(id)}"></option>`)
+      .join("");
+
+    const sceneTable = this._bridgeTable(rows.filter((r) => r.source === "scene"), "场景");
+    const fnTable = this._bridgeTable(rows.filter((r) => r.source === "function"), "功能点（真实设备回路/开关）");
+
+    const body = !data
+      ? `<div class="empty">${this._bridgeBusy ? "正在读取网关场景与功能点…" : "还没有数据，点右上角「刷新」。"}</div>`
+      : rows.length === 0
+      ? `<div class="empty">没有匹配的场景/功能点。<span class="note">网关里没有场景时，先在 HDL App 建一个场景并把面板键绑上去。</span></div>`
+      : `${sceneTable}${fnTable}`;
+
+    const style = `
+      <style>
+        :host { display: block; }
+        .wrap { padding: 16px 20px 40px; font-size: 14px; color: var(--primary-text-color,#1c1c1e); }
+        .head { display:flex; align-items:flex-start; gap:16px; flex-wrap:wrap; }
+        .head h2 { margin:0 0 4px; font-size:20px; font-weight:600; }
+        .head p { margin:0; color:var(--secondary-text-color,#6b6b70); font-size:13px; line-height:1.6; max-width:760px; }
+        .head .spacer { flex:1; }
+        .btn { border:1px solid var(--divider-color,#dcdfe3); background:var(--card-background-color,#fff);
+               color:var(--primary-text-color,#1c1c1e); border-radius:8px; padding:8px 14px; font-size:13px; cursor:pointer; }
+        .btn:hover { background:var(--secondary-background-color,#f5f6f7); }
+        .btn.primary { background:var(--primary-color,#03a9f4); border-color:transparent; color:#fff; font-weight:600; }
+        .btn[disabled] { opacity:.5; cursor:not-allowed; }
+        .btn.mini { padding:4px 10px; font-size:12px; border-radius:6px; }
+        .overview { margin:16px 0 12px; display:flex; gap:20px; flex-wrap:wrap; font-size:13px; color:var(--secondary-text-color,#6b6b70); }
+        .overview b { color:var(--primary-text-color,#1c1c1e); font-size:15px; }
+        .notice { border:1px solid #cfe3f7; background:#f5faff; border-radius:8px; padding:12px 14px; margin-bottom:14px; font-size:13px; line-height:1.8; }
+        .notice b { color:#0277bd; }
+        .notice ol { margin:6px 0 0 18px; padding:0; }
+        .notice li { font-size:12px; color:var(--secondary-text-color,#4a4a4d); line-height:1.8; }
+        .error { border:1px solid #f3c1c1; background:#fdf2f2; color:#a12626; border-radius:8px; padding:10px 14px; font-size:13px; margin-bottom:12px; }
+        .search { display:flex; align-items:center; gap:8px; margin-bottom:12px; border:1px solid var(--divider-color,#dcdfe3);
+                  border-radius:8px; padding:6px 10px; background:var(--card-background-color,#fff); max-width:520px; }
+        .search input { border:none; outline:none; font-size:13px; width:100%; background:transparent; color:var(--primary-text-color,#1c1c1e); }
+        .card { border:1px solid var(--divider-color,#dcdfe3); border-radius:10px; margin-bottom:14px; overflow:hidden; background:var(--card-background-color,#fff); }
+        .card-head { padding:10px 14px; background:var(--secondary-background-color,#f5f6f7); font-weight:600; font-size:14px; }
+        .rows { width:100%; border-collapse:collapse; }
+        .rows th { text-align:left; font-weight:500; font-size:12px; color:var(--secondary-text-color,#6b6b70); padding:8px 10px; border-bottom:1px solid var(--divider-color,#eef0f2); }
+        .rows td { padding:8px 10px; border-bottom:1px solid var(--divider-color,#f2f4f6); vertical-align:middle; }
+        .rows tr:last-child td { border-bottom:none; }
+        tr[data-bound="1"] td { background:#f6fbf7; }
+        .fn-name { font-size:13px; font-weight:500; }
+        .fn-sub { display:block; font-size:11px; color:var(--secondary-text-color,#9aa0a6); margin-top:2px; }
+        .state { font-size:12px; padding:2px 8px; border-radius:4px; background:var(--secondary-background-color,#f2f4f6); white-space:nowrap; }
+        .state.on { background:#e6f4ea; color:#1e7b34; }
+        .state.off { background:#f1f3f4; color:#5f6368; }
+        .tag { font-size:11px; padding:2px 8px; border-radius:999px; border:1px solid var(--divider-color,#dcdfe3); color:var(--secondary-text-color,#6b6b70); }
+        .tag.done { border-color:transparent; background:#e6f4ea; color:#1e7b34; font-weight:600; }
+        .tag.area { border-color:transparent; background:#e8f4fe; color:#0277bd; }
+        .ent { width:100%; box-sizing:border-box; font-size:12px; padding:5px 7px; border-radius:6px;
+               border:1px solid var(--divider-color,#dcdfe3); background:var(--card-background-color,#fff); color:var(--primary-text-color,#1c1c1e); }
+        .select { font-size:12px; padding:4px 6px; border-radius:6px; border:1px solid var(--divider-color,#dcdfe3);
+                  background:var(--card-background-color,#fff); color:var(--primary-text-color,#1c1c1e); }
+        .empty { border:1px dashed var(--divider-color,#dcdfe3); border-radius:10px; padding:28px; text-align:center;
+                 color:var(--secondary-text-color,#6b6b70); font-size:13px; line-height:1.7; }
+        .note { font-size:12px; color:var(--secondary-text-color,#6b6b70); }
+        .hit { font-size:12px; }
+        .hit.none { color:#a45c11; }
+      </style>`;
+
+    this.shadowRoot.innerHTML = `${style}
+      <div class="wrap">
+        ${this._tabsHtml()}
+        <div class="head">
+          <div>
+            <h2>按键桥 · 用 HDL 面板控制 HA 设备</h2>
+            <p>面板按键在网关内部由设备驱动执行，第三方设备没有 HDL 驱动，所以「按键 → HA 实体」不能直连。
+               可行且稳定的做法是事件桥：按键触发网关会广播的事件（场景执行 / 回路状态变化），HA 侧收到事件后执行动作。</p>
+          </div>
+          <div class="spacer"></div>
+          <button class="btn" id="bRefresh" ${this._bridgeBusy ? "disabled" : ""}>${this._bridgeBusy ? "读取中…" : "刷新"}</button>
+        </div>
+
+        <div class="notice">
+          <b>三步落地</b>（第 1、2 步在 HDL App 里做，LINK 协议不提供按键配置接口）：
+          <ol>
+            <li>HDL App 新建场景（建议命名 <b>HA:客厅灯</b>，需要 HA 侧动作时场景本身可以留空），把面板键绑到该场景；</li>
+            <li>回到本页点「刷新」，找到这个场景，在右侧填目标实体并点「绑定」；</li>
+            <li>按一下面板键：本页该行的「最近事件」变成「刚刚 / 几秒前」，同时 HA 实体状态变化。</li>
+          </ol>
+          <div class="note">若按了键「最近事件」仍是「—」，说明事件没到 HA：先确认面板键确实指向该场景（HDL App 里看），而不是 HA 侧绑定问题。</div>
+        </div>
+
+        <div class="overview">
+          <span>场景 <b>${counts.scenes}</b></span>
+          <span>真实功能点 <b>${counts.functions}</b></span>
+          <span>已绑定 <b>${counts.bound}</b></span>
+          <span>未绑定 <b>${counts.unbound}</b></span>
+          <span>收到过事件 <b>${counts.fired}</b></span>
+        </div>
+
+        ${this._bridgeError ? `<div class="error">${escapeHtml(this._bridgeError)}</div>` : ""}
+        ${
+          orphan.length
+            ? `<div class="error">有 ${orphan.length} 条绑定在网关里已找不到对应场景/功能点（多半是场景被改名或重建）：
+                ${orphan.map((o) => `${escapeHtml(o.sid)} → ${escapeHtml(o.entity_id || "")}`).join("；")}</div>`
+            : ""
+        }
+
+        <div class="search">
+          <span>搜索</span>
+          <input id="bq" placeholder="场景名 / 功能点名称 / SID / 实体" value="${escapeHtml(this._bridgeQuery)}">
+        </div>
+
+        <datalist id="hdl-ents">${entityOptions}</datalist>
+        ${body}
+      </div>`;
+
+    this._bindBridge();
+  }
+
+  _bridgeTable(rows, title) {
+    if (!rows.length) return "";
+    const trs = rows
+      .map((r) => {
+        const sid = String(r.sid || "");
+        const mode = r.mode || "action";
+        const action = r.action || "toggle";
+        const on = r.status === "on" || r.status === true;
+        const statusTxt =
+          r.source === "scene" ? (on ? "执行中" : "待机") : r.online === false ? "离线" : "在线";
+        const actions = ["toggle", "turn_on", "turn_off", "open", "close", "run"]
+          .map((a) => `<option value="${a}" ${a === action ? "selected" : ""}>${a}</option>`)
+          .join("");
+        const hit = r.count
+          ? `<span class="hit">${escapeHtml(this._relTime(r.last_at))} · ${r.count} 次</span>`
+          : `<span class="hit none">未收到过</span>`;
+        return `<tr data-bound="${r.bound ? 1 : 0}" data-row="${escapeHtml(sid)}">
+          <td>
+            <span class="fn-name">${escapeHtml(r.name || sid)}</span>
+            <span class="fn-sub">${escapeHtml(sid)}${
+          r.omodel ? " · " + escapeHtml(r.omodel) : ""
+        }</span>
+          </td>
+          <td style="width:90px"><span class="state ${on ? "on" : "off"}">${escapeHtml(statusTxt)}</span></td>
+          <td style="width:230px">
+            <input class="ent" list="hdl-ents" data-ent value="${escapeHtml(r.entity_id || "")}"
+              placeholder="选择或输入 HA 实体">
+          </td>
+          <td style="width:110px">
+            <select class="select" data-mode>
+              <option value="action" ${mode === "action" ? "selected" : ""}>action</option>
+              <option value="follow" ${mode === "follow" ? "selected" : ""}>follow</option>
+            </select>
+          </td>
+          <td style="width:110px">
+            <select class="select" data-act>${actions}</select>
+          </td>
+          <td style="width:120px">${hit}</td>
+          <td style="width:130px;text-align:right;white-space:nowrap">
+            <button class="btn mini primary" data-bind ${this._bridgeBusy ? "disabled" : ""}>绑定</button>
+            ${r.bound ? `<button class="btn mini" data-unbind ${this._bridgeBusy ? "disabled" : ""}>解绑</button>` : ""}
+          </td>
+        </tr>`;
+      })
+      .join("");
+    return `<div class="card">
+      <div class="card-head">${escapeHtml(title)} · ${rows.length} 项</div>
+      <table class="rows">
+        <thead><tr>
+          <th>名称 / SID</th><th>状态</th><th>绑定的 HA 实体</th><th>模式</th><th>动作</th><th>最近事件</th><th></th>
+        </tr></thead>
+        <tbody>${trs}</tbody>
+      </table>
+    </div>`;
+  }
+
+  _bindBridge() {
+    this._bindTabs();
+    const root = this.shadowRoot;
+    if (!root) return;
+
+    const refresh = root.querySelector("#bRefresh");
+    if (refresh) refresh.addEventListener("click", () => this._loadBridge());
+
+    const bq = root.querySelector("#bq");
+    if (bq) {
+      bq.addEventListener("input", (e) => {
+        this._bridgeQuery = e.target.value;
+        this._render();
+        const box = this.shadowRoot.querySelector("#bq");
+        if (box) {
+          box.focus();
+          box.setSelectionRange(box.value.length, box.value.length);
+        }
+      });
+    }
+
+    root.querySelectorAll("button[data-bind]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const tr = btn.closest("tr");
+        const sid = tr && tr.dataset ? tr.dataset.row : "";
+        if (!sid) return;
+        const ent = tr.querySelector("input[data-ent]");
+        const mode = tr.querySelector("select[data-mode]");
+        const act = tr.querySelector("select[data-act]");
+        const entityId = ent ? ent.value.trim() : "";
+        if (!entityId) {
+          this._bridgeError = "请先填写要绑定的 HA 实体（如 light.keting_deng）";
+          this._render();
+          return;
+        }
+        this._bindRow(sid, entityId, mode ? mode.value : "action", act ? act.value : "toggle");
+      });
+    });
+
+    root.querySelectorAll("button[data-unbind]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const tr = btn.closest("tr");
+        const sid = tr && tr.dataset ? tr.dataset.row : "";
+        if (sid) this._unbindRow(sid);
+      });
+    });
   }
 
   _deviceCard(device) {
@@ -773,7 +1111,22 @@ class HdlLinkProvision extends HTMLElement {
     </div>`;
   }
 
+  _bindTabs() {
+    const root = this.shadowRoot;
+    if (!root) return;
+    root.querySelectorAll(".tab").forEach((tab) => {
+      tab.addEventListener("click", () => {
+        const next = tab.dataset.tab;
+        if (!next || next === this._tab) return;
+        this._tab = next;
+        this._render();
+        if (next === "bridge" && !this._bridge && !this._bridgeBusy) this._loadBridge();
+      });
+    });
+  }
+
   _bind() {
+    this._bindTabs();
     const root = this.shadowRoot;
     if (!root) return;
 
