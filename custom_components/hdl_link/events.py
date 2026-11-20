@@ -159,6 +159,7 @@ async def async_handle(
             continue
 
         rule = data["sids"].get(sid)
+        auto = None
         if rule is None and kind in ("down", "function", "up"):
             # 网关把面板/App 对 HA 虚拟设备的控制当成属性变更，以 property/up 广播回来
             #（实测：按一次「虚拟可调灯」就收到一条 up，sids=该虚拟 sid，没有 down）
@@ -170,14 +171,25 @@ async def async_handle(
                 rule = {"entity_id": auto.get("entity_id"), "spk": auto.get("spk"),
                         "mode": "follow", "trigger": "any"}
         if not rule:
+            # 控制类属性（开/关/亮度/位置/色温/模式）没匹配到任何映射，才值得报警；
+            # 传感器周期上报（温度/照度/人感）不刷日志
+            control_like = {"on_off", "brightness", "percent", "position", "cct", "mode", "set_temp"}
+            if kind != "down" and (set(values) & control_like):
+                LOGGER.warning("HDL 控制类上报未命中任何映射: sid=%s status=%s（kind=%s）",
+                               sid, values, kind)
             continue
 
         key = ";".join(sorted(f"{k}={v}" for k, v in values.items()))
         if kind != "down" and data["state"].get(sid) == key:
             # 同一份 status 已经下发过，重复上报（含自己发 up 的回环）不再执行
+            if auto:
+                LOGGER.warning("HDL 控制被去重跳过: sid=%s status=%s（与上次相同）", sid, values)
             continue
         data["state"][sid] = key
         if not should_fire(rule.get("trigger") or "any", values, status):
+            if auto:
+                LOGGER.warning("HDL 控制未满足触发条件 %s: sid=%s status=%s",
+                               rule.get("trigger"), sid, values)
             continue
 
         entity_id = rule.get("entity_id") or ""
@@ -190,17 +202,21 @@ async def async_handle(
         else:
             calls = service_calls({"entity_id": entity_id, "spk": rule.get("spk") or ""}, status)
 
+        LOGGER.warning("HDL 控制执行: sid=%s 实体=%s 调用=%d 状态=%s",
+                       sid, entity_id, len(calls), values)
+        if not calls:
+            LOGGER.warning("HDL 控制翻译成 0 个服务调用（spk=%s status=%s）",
+                           rule.get("spk"), status)
         for call in calls:
             try:
                 await hass.services.async_call(
                     *call["service"].split("."), call["data"], blocking=False
                 )
                 executed.append({"sid": sid, **call})
+                LOGGER.warning("HDL 控制已下发 %s → %s %s",
+                               sid, call["service"], call.get("data"))
             except Exception as err:  # noqa: BLE001
                 LOGGER.warning("下发失败 %s → %s: %s", sid, call["service"], err)
-
-        if executed:
-            LOGGER.info("HDL 功能点 %s → %s", sid, rule.get("entity_id"))
 
     if dirty:
         await async_save(hass, data)
