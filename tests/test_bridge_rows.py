@@ -120,5 +120,13 @@ events._remember(data, "S1", {"on_off": "off"}, "scene")
 check("第二次 count=2 且状态更新",
       data["seen"][0]["count"] == 2 and data["seen"][0]["last_status"] == "on_off=off")
 
+print("[5] 实时台账合并（存储没落盘也不能让面板显示 0）")
+check("_remember 同步写进内存台账", events._MEM_SEEN["S1"]["count"] == 2)
+merged = events._merge_seen([{"sid": "S1", "count": 1, "last_at": 1}, {"sid": "S2", "count": 9, "last_at": 2}], events._MEM_SEEN)
+by_sid = {item["sid"]: item for item in merged}
+check("同 sid 取次数大的（内存 2 > 存储 1）", by_sid["S1"]["count"] == 2)
+check("只存在存储里的记录保留", by_sid["S2"]["count"] == 9)
+check("合并后无重复 sid", len(merged) == 2)
+
 print("\n结果：%d 项失败" % len(FAILED))
 sys.exit(1 if FAILED else 0)

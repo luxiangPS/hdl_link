@@ -51,6 +51,10 @@ MODES = ("follow", "action")
 SAVE_INTERVAL = 3
 _last_save_ts = 0.0
 
+# 进程内事件台账：面板「最近事件」优先读这里，不依赖存储落盘是否成功
+# （落盘只是为了让重启后还能看到历史；实时自检只看内存，毫秒级生效）
+_MEM_SEEN: dict[str, dict[str, Any]] = {}
+
 
 async def _store(hass: HomeAssistant):
     from homeassistant.helpers.storage import Store
@@ -161,6 +165,7 @@ def _remember(data: dict[str, Any], sid: str, values: dict[str, str], kind: str)
             item["kind"] = kind or item.get("kind") or ""
             item["last_at"] = now
             item["count"] = int(item.get("count") or 0) + 1
+            _MEM_SEEN[sid] = dict(item)
             return _maybe_dirty(now)
     seen.append(
         {
@@ -172,6 +177,7 @@ def _remember(data: dict[str, Any], sid: str, values: dict[str, str], kind: str)
             "count": 1,
         }
     )
+    _MEM_SEEN[sid] = dict(seen[-1])
     if len(seen) > 400:
         # 只保留最近 400 个 sid，防止长期运行把存储撑大（面板只需近期的自检信息）
         seen.sort(key=lambda item: int(item.get("last_at") or 0), reverse=True)
@@ -190,6 +196,7 @@ async def async_handle(
     """处理一批上行 objects：先记录，再按 sid 直连绑定执行。"""
     data = await async_load(hass)
     own = own_sids or set()
+    LOGGER.warning("HDL 上行批次 kind=%s 条数=%d", kind, len(objects))
     executed: list[dict[str, Any]] = []
     dirty = False
     for obj in objects:
@@ -293,11 +300,24 @@ async def async_bindings(hass: HomeAssistant) -> dict[str, Any]:
     data = await async_load(hass)
     return {
         "sids": data.get("sids") or {},
-        "seen": data.get("seen") or [],
+        "seen": _merge_seen(data.get("seen") or [], _MEM_SEEN),
         "modes": list(MODES),
         "actions": list(ACTION_SERVICES),
         "triggers": list(TRIGGERS),
     }
+
+
+def _merge_seen(saved: list[dict[str, Any]], live: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """存储里的历史台账 + 进程内实时台账，同 sid 取次数大的那份。"""
+    merged: dict[str, dict[str, Any]] = {}
+    for item in saved:
+        sid = str((item or {}).get("sid") or "")
+        if sid:
+            merged[sid] = dict(item)
+    for sid, item in (live or {}).items():
+        old = merged.get(sid) or {}
+        merged[sid] = item if int(item.get("count") or 0) >= int(old.get("count") or 0) else old
+    return list(merged.values())
 
 
 def join_scene_bindings(
