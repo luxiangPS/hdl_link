@@ -116,6 +116,8 @@ class LinkClient:
         self._pending: dict[str, asyncio.Future] = {}
         self._seq = 0
         self._lock = asyncio.Lock()
+        self._connect_lock = asyncio.Lock()
+        self._generation = 0
         self._push_queue: asyncio.Queue[tuple[str, bytes]] = asyncio.Queue(maxsize=64)
 
     # ------------------------------------------------------------------ 连接
@@ -124,42 +126,60 @@ class LinkClient:
         return self._writer is not None and not self._writer.is_closing()
 
     async def async_connect(self) -> None:
-        if self.connected:
-            return
-        # 连接超时跟随实例超时（网段探测时就要短，正常连接才用宽裕的上限）
-        connect_timeout = min(self.timeout, 12.0)
-        try:
-            self._reader, self._writer = await asyncio.wait_for(
-                asyncio.open_connection(self.host, self.port), timeout=connect_timeout
-            )
-        except (OSError, asyncio.TimeoutError) as err:
-            raise LinkError(f"连接 {self.host}:{self.port} 失败: {err}") from err
-        self._reader_task = asyncio.create_task(self._async_reader())
-        LOGGER.debug("HDL LINK 已连接 %s:%s", self.host, self.port)
-
-    async def async_close(self) -> None:
-        if self._reader_task is not None:
-            self._reader_task.cancel()
-            self._reader_task = None
-        if self._writer is not None:
+        # 串行化连接：并发调用（启动 + 状态同步刷新）不能各开一条 reader，
+        # 否则同一 StreamReader 上会有两个协程在 read()，直接 RuntimeError
+        async with self._connect_lock:
+            if self.connected:
+                return
+            await self._async_teardown()
+            # 连接超时跟随实例超时（网段探测时就要短，正常连接才用宽裕的上限）
+            connect_timeout = min(self.timeout, 12.0)
             try:
-                self._writer.close()
-                await self._writer.wait_closed()
+                reader, writer = await asyncio.wait_for(
+                    asyncio.open_connection(self.host, self.port), timeout=connect_timeout
+                )
+            except (OSError, asyncio.TimeoutError) as err:
+                raise LinkError(f"连接 {self.host}:{self.port} 失败: {err}") from err
+            self._generation += 1
+            self._reader, self._writer = reader, writer
+            self._reader_task = asyncio.create_task(
+                self._async_reader(reader, writer, self._generation)
+            )
+            LOGGER.debug("HDL LINK 已连接 %s:%s", self.host, self.port)
+
+    async def _async_teardown(self) -> None:
+        """关掉残留的连接与读协程（不递增 generation 之外的副作用）。"""
+        if self._reader_task is not None:
+            task, self._reader_task = self._reader_task, None
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                    pass
+        if self._writer is not None:
+            writer, self._writer = self._writer, None
+            try:
+                writer.close()
             except OSError:
                 pass
-            self._writer = None
         self._reader = None
         for fut in self._pending.values():
             if not fut.done():
                 fut.cancel()
         self._pending.clear()
 
-    async def _async_reader(self) -> None:
+    async def async_close(self) -> None:
+        self._generation += 1      # 让还在跑的旧 reader 失效
+        await self._async_teardown()
+
+    async def _async_reader(self, reader: asyncio.StreamReader,
+                            writer: asyncio.StreamWriter, generation: int) -> None:
+        """每个连接一条 reader；只用传入的 reader/writer，不碰可能被替换的 self._*。"""
         buf = b""
-        assert self._reader is not None
         try:
             while True:
-                chunk = await self._reader.read(65536)
+                chunk = await reader.read(65536)
                 if not chunk:
                     break
                 buf += chunk
@@ -168,17 +188,20 @@ class LinkClient:
                     self._dispatch(topic, raw)
         except (asyncio.CancelledError, OSError):
             pass
+        except RuntimeError as err:  # 兜底：避免异常把后台任务打炸
+            LOGGER.debug("读循环异常: %s", err)
         finally:
-            writer, self._writer = self._writer, None
-            if writer is not None:
-                try:
-                    writer.close()
-                except OSError:
-                    pass
-            for fut in self._pending.values():
-                if not fut.done():
-                    fut.set_exception(LinkError("连接已断开"))
-            self._pending.clear()
+            if generation == self._generation:
+                self._writer = None
+                self._reader = None
+                for fut in self._pending.values():
+                    if not fut.done():
+                        fut.set_exception(LinkError("连接已断开"))
+                self._pending.clear()
+            try:
+                writer.close()
+            except OSError:
+                pass
 
     def _dispatch(self, topic: str, raw: bytes) -> None:
         body: dict[str, Any] | None = None
