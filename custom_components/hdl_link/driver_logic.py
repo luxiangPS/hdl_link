@@ -18,6 +18,28 @@ def normalize_status(status: Any) -> list[dict[str, str]]:
     return out
 
 
+EVENT_KINDS = ("scene", "logic")
+
+
+def is_event_kind(kind: str) -> bool:
+    """场景/逻辑执行事件：每次都是一次动作，不是状态，需要绕过状态去重。"""
+    return str(kind) in EVENT_KINDS
+
+
+def event_values(obj: dict[str, Any]) -> dict[str, str]:
+    """场景/逻辑事件的字段：{"sid":…, "status":"on"/"success", "enable":"true"}。
+
+    这类事件的 status 是一个字符串（不是 status 数组），单独取出来当触发值。
+    """
+    out: dict[str, str] = {}
+    raw = obj.get("status")
+    if isinstance(raw, str) and raw:
+        out["status"] = raw
+    if obj.get("enable") is not None:
+        out["enable"] = str(obj.get("enable"))
+    return out
+
+
 def should_fire(trigger: str, values: dict[str, str], status: list[dict[str, str]]) -> bool:
     """功能点上报是否值得下发：trigger=any|on|off，空 status 不下发。"""
     if trigger in ("on", "off") and values.get("on_off") != trigger:

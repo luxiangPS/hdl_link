@@ -242,3 +242,30 @@ curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/js
 `mode`：`follow / action`；`action`：`turn_on / turn_off / toggle / open / close / run`；
 `trigger`：`any / on / off`。删除绑定：同接口传 `"entity_id": null`。
 旧地址 `/api/hdl_link/event_map` 仍可用，语义已改为功能点绑定。
+---
+
+## 14. HDL 面板 → HA：为什么只有场景这条路
+
+实测（151 网关，HDL IP Tool 同时监听 8586）结论，写在前面免得反复试：
+
+| 现象 | 结果 |
+| --- | --- |
+| 面板/App 控 HA 虚拟功能点（无驱动接管） | 网关**既不推 `property/down`，也不改自己存的状态**；`down` 回 `Success` 但 `read` 读回仍原值 |
+| 集成自己发 `property/up` | 广播给其它连接，发送者自身无回显 |
+| 面板按键触发**场景** | 网关真实广播 `/user/{gw}/custom/scene/status/up`（实测一次执行收到 6 条事件） |
+
+所以 HDL → HA 的现实可行链路是**面板键 → 场景 → HA**：
+
+1. HDL 侧（App 的"场景"或 Studio）把面板键绑定到某个场景（含一台 HA 虚拟设备也行）；
+2. 面板按下，网关广播 `scene/status/up`，集成收到后按绑定表执行 HA 服务；
+3. 绑定必须用 `mode=action`（事件没有属性 status 可翻译），例如：
+
+```bash
+curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{"sid":"0201036AFD43B20A0A0100011100","entity_id":"light.ha_lamp","mode":"action","action":"toggle"}' \
+  http://<ha>:8123/api/hdl_link/binding
+```
+
+- 未绑定的场景/逻辑事件会打 WARNING 并把 sid 记进 `seen`，面板下拉里就能选，不用手工抄。
+- 事件每次按下都执行，不参与状态去重（连按两次就是两次）。
+- `logic/status/up` 的 `status=success`、`enable=true` 同样按一次事件处理。

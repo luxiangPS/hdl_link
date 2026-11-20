@@ -22,7 +22,13 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 
-from .driver_logic import normalize_status, service_calls, should_fire
+from .driver_logic import (
+    event_values,
+    is_event_kind,
+    normalize_status,
+    service_calls,
+    should_fire,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -148,14 +154,18 @@ async def async_handle(
         sid = str(obj.get("sid") or "")
         if not sid:
             continue
+        is_event = is_event_kind(kind)
         status = normalize_status(obj.get("status"))
         values = {item["key"]: item["value"] for item in status}
-        if kind != "down" and sid in own:
+        if is_event:
+            # 场景/逻辑事件的 status 是字符串（"on" / "success"），不是属性数组
+            values = {**values, **event_values(obj)}
+        if kind != "down" and not is_event and sid in own:
             # 上行属性：我们自己注册进网关的 HA 设备由协调器刷新，不参与绑定判断
             continue
         if _remember(data, sid, values, kind):
             dirty = True
-        if not status:
+        if not status and not is_event:
             continue
 
         rule = data["sids"].get(sid)
@@ -171,26 +181,37 @@ async def async_handle(
                 rule = {"entity_id": auto.get("entity_id"), "spk": auto.get("spk"),
                         "mode": "follow", "trigger": "any"}
         if not rule:
-            # 控制类属性（开/关/亮度/位置/色温/模式）没匹配到任何映射，才值得报警；
-            # 传感器周期上报（温度/照度/人感）不刷日志
             control_like = {"on_off", "brightness", "percent", "position", "cct", "mode", "set_temp"}
-            if kind != "down" and (set(values) & control_like):
+            if is_event:
+                LOGGER.warning("HDL 场景/逻辑事件未绑定: kind=%s sid=%s，"
+                               "可用 /api/hdl_link/binding 绑定（mode=action）", kind, sid)
+            elif kind != "down" and (set(values) & control_like):
+                # 控制类属性没匹配到任何映射才报警；传感器周期上报不刷日志
                 LOGGER.warning("HDL 控制类上报未命中任何映射: sid=%s status=%s（kind=%s）",
                                sid, values, kind)
             continue
 
-        key = ";".join(sorted(f"{k}={v}" for k, v in values.items()))
-        if kind != "down" and data["state"].get(sid) == key:
-            # 同一份 status 已经下发过，重复上报（含自己发 up 的回环）不再执行
-            if auto:
-                LOGGER.warning("HDL 控制被去重跳过: sid=%s status=%s（与上次相同）", sid, values)
-            continue
-        data["state"][sid] = key
-        if not should_fire(rule.get("trigger") or "any", values, status):
-            if auto:
-                LOGGER.warning("HDL 控制未满足触发条件 %s: sid=%s status=%s",
-                               rule.get("trigger"), sid, values)
-            continue
+        if is_event:
+            # 场景/逻辑事件每次都是一次「按下」，必须每次执行，不参与状态去重
+            if rule.get("mode") != "action":
+                LOGGER.warning("场景 %s 绑定的是 follow 模式，事件没有属性状态可翻译；"
+                               "请改成 mode=action（toggle/turn_on/…）", sid)
+                continue
+            if values.get("status") not in ("on", "success", "true"):
+                continue
+        else:
+            key = ";".join(sorted(f"{k}={v}" for k, v in values.items()))
+            if kind != "down" and data["state"].get(sid) == key:
+                # 同一份 status 已经下发过，重复上报（含自己发 up 的回环）不再执行
+                if auto:
+                    LOGGER.warning("HDL 控制被去重跳过: sid=%s status=%s（与上次相同）", sid, values)
+                continue
+            data["state"][sid] = key
+            if not should_fire(rule.get("trigger") or "any", values, status):
+                if auto:
+                    LOGGER.warning("HDL 控制未满足触发条件 %s: sid=%s status=%s",
+                                   rule.get("trigger"), sid, values)
+                continue
 
         entity_id = rule.get("entity_id") or ""
         if not entity_id:
