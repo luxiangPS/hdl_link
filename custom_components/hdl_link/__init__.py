@@ -100,11 +100,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await _async_setup_provision(hass)
 
     async def _heartbeat_loop() -> None:
+        """心跳 + 保活上报：没有这条循环，写进网关的 HA 功能点会掉成 offline。"""
         while True:
             await asyncio.sleep(HEARTBEAT_INTERVAL)
             await coordinator.gateway.async_heartbeat()
+            try:
+                pushed = await async_sync_states(hass, coordinator)
+                LOGGER.debug("保活上报 %d 个功能点", pushed)
+            except Exception as err:  # noqa: BLE001 - 保活失败不能中断循环
+                LOGGER.warning("保活上报失败: %s", err)
 
     entry.async_create_background_task(hass, _heartbeat_loop(), f"{DOMAIN}-heartbeat")
+
+    # 启动时立刻推一次，别等第一个 30 秒周期
+    try:
+        await async_sync_states(hass, coordinator)
+    except Exception as err:  # noqa: BLE001
+        LOGGER.debug("启动时上报失败: %s", err)
     return True
 
 
