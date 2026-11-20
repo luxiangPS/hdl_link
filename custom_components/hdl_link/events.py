@@ -80,7 +80,12 @@ async def async_load(hass: HomeAssistant) -> dict[str, Any]:
 
 async def async_save(hass: HomeAssistant, data: dict[str, Any]) -> None:
     try:
-        await (await _store(hass)).async_save(data)
+        store = await _store(hass)
+        if hasattr(store, "async_delay_save"):
+            # 每秒都可能来事件（灯泡状态、按键连按），合并写盘，避免刷爆存储
+            store.async_delay_save(lambda: data, 8)
+            return
+        await store.async_save(data)
     except Exception as err:  # noqa: BLE001
         LOGGER.warning("保存功能绑定失败: %s", err)
 
@@ -139,7 +144,7 @@ def _remember(data: dict[str, Any], sid: str, values: dict[str, str], kind: str)
             item["kind"] = kind or item.get("kind") or ""
             item["last_at"] = now
             item["count"] = int(item.get("count") or 0) + 1
-            return False
+            return True
     seen.append(
         {
             "sid": sid,
@@ -150,6 +155,10 @@ def _remember(data: dict[str, Any], sid: str, values: dict[str, str], kind: str)
             "count": 1,
         }
     )
+    if len(seen) > 400:
+        # 只保留最近 400 个 sid，防止长期运行把存储撑大（面板只需近期的自检信息）
+        seen.sort(key=lambda item: int(item.get("last_at") or 0), reverse=True)
+        del seen[400:]
     return True
 
 
