@@ -254,3 +254,42 @@ async def async_bindings(hass: HomeAssistant) -> dict[str, Any]:
         "actions": list(ACTION_SERVICES),
         "triggers": list(TRIGGERS),
     }
+
+
+def join_scene_bindings(scenes: list[dict[str, Any]], binds: dict[str, Any]) -> dict[str, Any]:
+    """把网关场景清单和本地绑定表拼成一张排查表（纯函数，便于自测）。
+
+    输出三件事：
+    - scenes：每个场景 + 是否已绑定、绑到哪个实体、什么模式/动作；
+    - unbound：网关有、但 HA 完全没绑的场景名（面板按了不可能有反应）；
+    - orphan_bindings：HA 绑了、但网关里已经没有的 sid（绑了但永远不触发）。
+    """
+    items: list[dict[str, Any]] = []
+    for scene in scenes or []:
+        sid = str(scene.get("sid") or "")
+        rule = (binds or {}).get(sid) or {}
+        items.append(
+            {
+                "sid": sid,
+                "name": scene.get("name"),
+                "status": scene.get("status"),
+                "bound": bool(rule),
+                "entity_id": rule.get("entity_id"),
+                "mode": rule.get("mode"),
+                "action": rule.get("action"),
+                "trigger": rule.get("trigger"),
+            }
+        )
+    gateway_sids = {item["sid"] for item in items}
+    orphan = [
+        {"sid": sid, "entity_id": (rule or {}).get("entity_id")}
+        for sid, rule in (binds or {}).items()
+        if sid not in gateway_sids
+    ]
+    return {
+        "count": len(items),
+        "bound": sum(1 for item in items if item["bound"]),
+        "unbound": [item["name"] for item in items if not item["bound"]],
+        "scenes": items,
+        "orphan_bindings": orphan,
+    }

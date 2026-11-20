@@ -48,12 +48,13 @@ PANEL_URL_PATH = "hdl-device-sync"
 PANEL_COMPONENT = "hdl-link-provision"
 STATIC_URL = "/hdl_link_static"
 PANEL_JS = Path(__file__).parent / "frontend"
-PANEL_VERSION = "2.8.7"
+PANEL_VERSION = "2.8.8"
 
 SERVICE_SCAN = "scan"
 SERVICE_PROVISION = "provision"
 SERVICE_SYNC = "sync"
 SERVICE_BIND = "bind"
+SERVICE_SCENE_LIST = "scene_list"
 
 SCAN_SCHEMA = vol.Schema({vol.Optional("entry_id"): cv.string})
 BIND_SCHEMA = vol.Schema(
@@ -262,6 +263,26 @@ async def _async_setup_provision(hass: HomeAssistant) -> None:
             supports_response=SupportsResponse.OPTIONAL,
         )
 
+    async def _handle_scene_list(call: ServiceCall) -> dict:
+        """列出网关里的场景 + 每个场景的 HA 绑定情况（排查「面板按了没反应」用）。"""
+        from .events import async_bindings, join_scene_bindings
+
+        coordinator = _coordinator(call.data.get("entry_id"))
+        if coordinator is None:
+            raise ValueError("HDL LINK 尚未配置")
+        scenes = await coordinator.gateway.async_scenes()
+        binds = (await async_bindings(hass)).get("sids") or {}
+        return join_scene_bindings(scenes, binds)
+
+    if not hass.services.has_service(DOMAIN, SERVICE_SCENE_LIST):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_SCENE_LIST,
+            _handle_scene_list,
+            schema=SCAN_SCHEMA,
+            supports_response=SupportsResponse.OPTIONAL,
+        )
+
     if not hass.services.has_service(DOMAIN, SERVICE_SYNC):
         hass.services.async_register(
             DOMAIN,
@@ -273,6 +294,7 @@ async def _async_setup_provision(hass: HomeAssistant) -> None:
 
 
 __all__ = ["async_setup_entry", "async_unload_entry", "CONF_GW_ID"]
+
 
 
 

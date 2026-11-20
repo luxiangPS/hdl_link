@@ -86,3 +86,12 @@ bind:
             - "any"
             - "on"
             - "off"
+scene_list:
+  name: 列出网关场景及绑定状态
+  description: 读取 HDL 网关里的全部场景，并给出每个场景是否已绑定 HA 实体、绑到哪个实体、以及绑定了但网关侧已不存在的失效绑定。用于排查「面板按了没反应」。
+  fields:
+    entry_id:
+      name: 配置条目
+      description: 多网关时可指定；只有一个网关时留空。
+      selector:
+        text:
