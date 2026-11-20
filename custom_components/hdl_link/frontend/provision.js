@@ -235,7 +235,7 @@ class HdlLinkProvision extends HTMLElement {
   }
 
   /** 行内的「绑定」：sid → HA 实体 */
-  async _bindRow(sid, entityId, mode, action) {
+  async _bindRow(sid, entityId, mode, action, trigger) {
     try {
       this._bridgeBusy = true;
       this._render();
@@ -244,7 +244,7 @@ class HdlLinkProvision extends HTMLElement {
         entity_id: entityId,
         mode,
         action,
-        trigger: "any",
+        trigger: trigger || "any",
       });
       await this._loadBridge();
     } catch (err) {
@@ -810,6 +810,10 @@ class HdlLinkProvision extends HTMLElement {
             <li>按一下面板键：本页该行的「最近事件」变成「刚刚 / 几秒前」，同时 HA 实体状态变化。</li>
           </ol>
           <div class="note">若按了键「最近事件」仍是「—」，说明事件没到 HA：先确认面板键确实指向该场景（HDL App 里看），而不是 HA 侧绑定问题。</div>
+          <div class="note"><b>另一种更省事的玩法（脉冲回路）：</b>HDL App 里把面板键直接配成「控制某一路空继电器回路」（不接负载），
+          然后在下面「功能点」表里把该回路绑定到 HA 实体、模式 action、动作 toggle、<b>触发沿选 on 沿</b>。
+          按一次键 → 回路 on → 网关广播 <code>property/up</code> → HA 执行一次动作；再按 → 回路 off，不重复触发。
+          这条路不需要建场景，实测空回路同样会广播 up。</div>
         </div>
 
         <div class="overview">
@@ -857,6 +861,14 @@ class HdlLinkProvision extends HTMLElement {
         const hit = r.count
           ? `<span class="hit">${escapeHtml(this._relTime(r.last_at))} · ${r.count} 次</span>`
           : `<span class="hit none">未收到过</span>`;
+        const trig = r.trigger || "any";
+        const trigs = [
+          ["any", "任意"],
+          ["on", "on 沿"],
+          ["off", "off 沿"],
+        ]
+          .map(([v, label]) => `<option value="${v}" ${v === trig ? "selected" : ""}>${label}</option>`)
+          .join("");
         return `<tr data-bound="${r.bound ? 1 : 0}" data-row="${escapeHtml(sid)}">
           <td>
             <span class="fn-name">${escapeHtml(r.name || sid)}</span>
@@ -878,6 +890,9 @@ class HdlLinkProvision extends HTMLElement {
           <td style="width:110px">
             <select class="select" data-act>${actions}</select>
           </td>
+          <td style="width:110px">
+            <select class="select" data-trig>${trigs}</select>
+          </td>
           <td style="width:120px">${hit}</td>
           <td style="width:130px;text-align:right;white-space:nowrap">
             <button class="btn mini primary" data-bind ${this._bridgeBusy ? "disabled" : ""}>绑定</button>
@@ -890,7 +905,7 @@ class HdlLinkProvision extends HTMLElement {
       <div class="card-head">${escapeHtml(title)} · ${rows.length} 项</div>
       <table class="rows">
         <thead><tr>
-          <th>名称 / SID</th><th>状态</th><th>绑定的 HA 实体</th><th>模式</th><th>动作</th><th>最近事件</th><th></th>
+          <th>名称 / SID</th><th>状态</th><th>绑定的 HA 实体</th><th>模式</th><th>动作</th><th>触发沿</th><th>最近事件</th><th></th>
         </tr></thead>
         <tbody>${trs}</tbody>
       </table>
@@ -926,13 +941,20 @@ class HdlLinkProvision extends HTMLElement {
         const ent = tr.querySelector("input[data-ent]");
         const mode = tr.querySelector("select[data-mode]");
         const act = tr.querySelector("select[data-act]");
+        const trig = tr.querySelector("select[data-trig]");
         const entityId = ent ? ent.value.trim() : "";
         if (!entityId) {
           this._bridgeError = "请先填写要绑定的 HA 实体（如 light.keting_deng）";
           this._render();
           return;
         }
-        this._bindRow(sid, entityId, mode ? mode.value : "action", act ? act.value : "toggle");
+        this._bindRow(
+          sid,
+          entityId,
+          mode ? mode.value : "action",
+          act ? act.value : "toggle",
+          trig ? trig.value : "any"
+        );
       });
     });
 
