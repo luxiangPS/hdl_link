@@ -19,7 +19,11 @@ if (!FILE) {
 const store = {};
 const sandbox = {
   HTMLElement: class {},
-  customElements: { define() {} },
+  customElements: {
+    _registry: {},
+    define(name, cls) { this._registry[name] = cls; },
+    get(name) { return this._registry[name]; },
+  },
   window: {
     localStorage: {
       getItem: (k) => (k in store ? store[k] : null),
