@@ -184,7 +184,7 @@ async def async_handle(
             control_like = {"on_off", "brightness", "percent", "position", "cct", "mode", "set_temp"}
             if is_event:
                 LOGGER.warning("HDL 场景/逻辑事件未绑定: kind=%s sid=%s，"
-                               "可用 /api/hdl_link/binding 绑定（mode=action）", kind, sid)
+                               "可用服务 hdl_link.bind（或 /api/hdl_link/binding）绑定，mode=action", kind, sid)
             elif kind != "down" and (set(values) & control_like):
                 # 控制类属性没匹配到任何映射才报警；传感器周期上报不刷日志
                 LOGGER.warning("HDL 控制类上报未命中任何映射: sid=%s status=%s（kind=%s）",

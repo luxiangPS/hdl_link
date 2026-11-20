@@ -48,13 +48,25 @@ PANEL_URL_PATH = "hdl-device-sync"
 PANEL_COMPONENT = "hdl-link-provision"
 STATIC_URL = "/hdl_link_static"
 PANEL_JS = Path(__file__).parent / "frontend"
-PANEL_VERSION = "2.8.5"
+PANEL_VERSION = "2.8.6"
 
 SERVICE_SCAN = "scan"
 SERVICE_PROVISION = "provision"
 SERVICE_SYNC = "sync"
+SERVICE_BIND = "bind"
 
 SCAN_SCHEMA = vol.Schema({vol.Optional("entry_id"): cv.string})
+BIND_SCHEMA = vol.Schema(
+    {
+        vol.Required("sid"): cv.string,
+        vol.Optional("entity_id"): vol.Any(cv.string, None),
+        vol.Optional("mode", default="action"): vol.In(["follow", "action"]),
+        vol.Optional("action", default="toggle"): cv.string,
+        vol.Optional("trigger", default="any"): vol.In(["any", "on", "off"]),
+        vol.Optional("spk"): cv.string,
+        vol.Optional("name"): cv.string,
+    }
+)
 PROVISION_SCHEMA = vol.Schema(
     {
         vol.Required("devices"): vol.All(cv.ensure_list, [dict]),
@@ -226,6 +238,29 @@ async def _async_setup_provision(hass: HomeAssistant) -> None:
             raise ValueError("HDL LINK 尚未配置")
         pushed = await async_sync_states(hass, coordinator)
         return {"pushed": pushed}
+
+    async def _handle_bind(call: ServiceCall) -> dict:
+        from .events import async_set_mapping
+
+        return await async_set_mapping(
+            hass,
+            str(call.data["sid"]),
+            entity_id=call.data.get("entity_id"),
+            mode=call.data.get("mode", "action"),
+            action=call.data.get("action", "toggle"),
+            trigger=call.data.get("trigger", "any"),
+            spk=call.data.get("spk"),
+            name=call.data.get("name"),
+        )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_BIND):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_BIND,
+            _handle_bind,
+            schema=BIND_SCHEMA,
+            supports_response=SupportsResponse.OPTIONAL,
+        )
 
     if not hass.services.has_service(DOMAIN, SERVICE_SYNC):
         hass.services.async_register(

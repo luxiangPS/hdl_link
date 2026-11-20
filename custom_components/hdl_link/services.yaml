@@ -43,3 +43,46 @@ sync:
       example: 01JABCDEF
       selector:
         text:
+
+bind:
+  name: 绑定 HDL 按键/场景到 HA 实体
+  description: 把 HDL 功能点、面板按键、场景或逻辑的 SID 绑定到一个 HA 实体。mode=action 时每收到一次事件执行一次动作（面板键当遥控器）；mode=follow 时跟随属性状态。
+  fields:
+    sid:
+      name: HDL SID
+      description: 功能点/场景/逻辑的 SID，可从日志里的「HDL 场景/逻辑事件未绑定」看到。
+      required: true
+      example: "0201036AFD43B20A0A0100011100"
+      selector:
+        text:
+    entity_id:
+      name: HA 实体
+      description: 目标实体；传空值表示删除该 SID 的绑定。
+      example: "light.keting"
+      selector:
+        entity:
+    mode:
+      name: 绑定模式
+      description: action = 每次事件执行一次动作；follow = 跟随属性状态（用于真实设备的功能点）。
+      default: action
+      selector:
+        select:
+          options:
+            - action
+            - follow
+    action:
+      name: 动作
+      description: mode=action 时执行的服务，如 toggle / turn_on / turn_off / open / close / run。
+      default: toggle
+      selector:
+        text:
+    trigger:
+      name: 触发条件（follow 模式用）
+      description: any / on / off。
+      default: any
+      selector:
+        select:
+          options:
+            - any
+            - on
+            - off
