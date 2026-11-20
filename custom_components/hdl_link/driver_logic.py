@@ -1,0 +1,88 @@
+"""下行 status → HA 服务调用的纯逻辑（不依赖 Home Assistant，便于单测）。"""
+
+from __future__ import annotations
+
+from typing import Any
+
+
+def service_calls(info: dict[str, Any], status: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """把 HDL 的一条 status 数组翻译成 HA 服务调用列表。
+
+    info: {"entity_id","spk"}
+    status: [{"key","value"}]
+    返回: [{"service": "light.turn_on", "data": {...}}]
+    """
+    entity_id = info.get("entity_id") or ""
+    spk = info.get("spk") or ""
+    domain = entity_id.split(".")[0] if "." in entity_id else ""
+    values = {str(x.get("key")): str(x.get("value")) for x in status if x.get("key")}
+    calls: list[dict[str, Any]] = []
+
+    def add(service: str, **data: Any) -> None:
+        calls.append({"service": service, "data": {"entity_id": entity_id, **data}})
+
+    if not entity_id:
+        return calls
+
+    on_off = values.get("on_off")
+    if on_off is not None:
+        if spk.startswith("curtain") or domain == "cover":
+            if on_off == "stop":
+                add("cover.stop_cover")
+            elif on_off == "on":
+                add("cover.open_cover")
+            elif on_off == "off":
+                add("cover.close_cover")
+        elif spk.startswith("hvac") or domain == "climate":
+            add("climate.turn_on" if on_off == "on" else "climate.turn_off")
+        elif on_off == "on":
+            add(f"{domain}.turn_on")
+        elif on_off == "off":
+            add(f"{domain}.turn_off")
+
+    if "brightness" in values and domain == "light":
+        try:
+            pct = max(0, min(100, int(float(values["brightness"]))))
+        except ValueError:
+            pct = None
+        if pct is not None:
+            add("light.turn_on", brightness_pct=pct)
+
+    if "cct" in values and domain == "light":
+        try:
+            kelvin = int(float(values["cct"]))
+        except ValueError:
+            kelvin = 0
+        if kelvin > 0:
+            add("light.turn_on", color_temp_kelvin=kelvin)
+
+    if "rgb" in values and domain == "light":
+        parts = [p.strip() for p in values["rgb"].split(",")]
+        if len(parts) == 3:
+            try:
+                r, g, b = (int(p) for p in parts)
+                add("light.turn_on", rgb_color=[r, g, b])
+            except ValueError:
+                pass
+
+    if "percent" in values and domain == "cover":
+        try:
+            add("cover.set_cover_position", position=int(float(values["percent"])))
+        except ValueError:
+            pass
+
+    if "set_temp" in values and domain == "climate":
+        try:
+            add("climate.set_temperature", temperature=float(values["set_temp"]))
+        except ValueError:
+            pass
+
+    if "mode" in values and domain == "climate":
+        mode = values["mode"]
+        if mode in ("cool", "heat", "fan", "dry", "auto"):
+            add("climate.set_hvac_mode", hvac_mode=mode)
+
+    if "fan" in values and domain == "climate":
+        add("climate.set_fan_mode", fan_mode=values["fan"])
+
+    return calls

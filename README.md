@@ -185,3 +185,46 @@ action:
 
 要真正的实时下行控制（网关把控制直接送到 HA 端），需要网关侧有一个注册驱动接收
 `property/down`（`driver_name` + 驱动配置表），当前开源集成做不到这一步。
+
+---
+
+## 12. HA 驱动后端（供网关侧驱动对接）
+
+集成内置了一套「驱动后端」接口，网关侧只要有驱动进程（driver_name=ha）就能直接对接：
+
+| 接口 | 用途 |
+|---|---|
+| `GET /api/hdl_link/driver/devices` | 全量 HA 设备清单：实体、域、spk、当前状态、oid/sid、是否已注册 |
+| `POST /api/hdl_link/driver/down` | 驱动把网关下行转给 HA 执行：`{"objects":[{"sid","status":[{key,value}]}]}` |
+| `POST /api/hdl_link/driver/edit` | 编辑已注册功能：`{"entity_id","action":"rename|set_spk|delete","name"/"spk"}` |
+| `POST /api/hdl_link/driver/register` | 把 sid 以 `driver_name` 上报网关（验证驱动是否就绪） |
+
+现成的驱动代理脚本：`tools/hdl_ha_driver.py`（仅标准库，跑在局域网任意机器）
+
+```bat
+python tools\hdl_ha_driver.py --gateway 192.168.1.151 --name ha ^
+       --ha-url http://172.26.30.104:8123 --ha-token <HA长效令牌>
+```
+
+**已知硬门槛**：`driverconfig/edit` 会校验驱动是否已安装，未安装直接返回
+`500001「驱动不存在」`（实测）。所以脚本能跑通状态上报，但**收不到下行**——
+除非网关侧已经装好名为 `ha` 的驱动（需要驱动安装包 / 驱动证书）。
+
+---
+
+## 13. 场景 SID → HA 动作（不用写自动化也能"面板控 HA"）
+
+面板键绑定场景后，网关推 `scene/status/up`；集成按 **SID** 查本地映射表，命中就直接调 HA 服务：
+
+```bash
+# 查看收到的场景/逻辑 SID（seen 里会自动累积）
+curl -H "Authorization: Bearer <token>" http://<ha>:8123/api/hdl_link/event_map
+
+# 绑定：场景 sid → 开灯
+curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{"sid":"0201036AFD43B20A0A0100011100","entity_id":"light.keting","action":"turn_on"}' \
+  http://<ha>:8123/api/hdl_link/event_map
+```
+
+`action` 可选：`turn_on / turn_off / toggle / open / close / run`。
+删除映射：同接口传 `entity_id: null`。

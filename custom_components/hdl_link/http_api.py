@@ -11,6 +11,12 @@ from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN
+from .driver_bridge import (
+    async_device_list,
+    async_drive_down,
+    async_edit_function,
+    async_push_driver_config,
+)
 from .provision import async_mapping, async_provision
 from .scan import async_scan
 
@@ -92,4 +98,159 @@ class HdlMappingView(HomeAssistantView):
         return self.json({"mapping": mapping, "count": len(mapping)})
 
 
-VIEWS = (HdlScanView(), HdlProvisionView(), HdlMappingView())
+class HdlDriverDevicesView(HomeAssistantView):
+    """GET /api/hdl_link/driver/devices —— 供 HA 驱动取全量设备清单（含编辑态）。"""
+
+    url = "/api/hdl_link/driver/devices"
+    name = "api:hdl_link:driver_devices"
+    requires_auth = True
+
+    async def get(self, request: web.Request) -> web.Response:
+        hass: HomeAssistant = request.app["hass"]
+        coordinator = _coordinator(hass, request.query.get("entry_id"))
+        if coordinator is None:
+            return self.json_message("HDL LINK 尚未配置", status_code=400)
+        try:
+            result = await async_device_list(hass, coordinator)
+        except Exception as err:  # noqa: BLE001
+            LOGGER.exception("取设备清单失败")
+            return self.json({"error": f"{type(err).__name__}: {err}"}, status_code=500)
+        return self.json(result)
+
+
+class HdlDriverDownView(HomeAssistantView):
+    """POST /api/hdl_link/driver/down —— 驱动把网关下行转给 HA 执行。
+
+    请求体：{"objects": [{"sid": "...", "status": [{"key": "on_off", "value": "on"}]}]}
+    """
+
+    url = "/api/hdl_link/driver/down"
+    name = "api:hdl_link:driver_down"
+    requires_auth = True
+
+    async def post(self, request: web.Request) -> web.Response:
+        hass: HomeAssistant = request.app["hass"]
+        try:
+            body = await request.json()
+        except ValueError:
+            return self.json_message("请求体必须是 JSON", status_code=400)
+        coordinator = _coordinator(hass, body.get("entry_id"))
+        if coordinator is None:
+            return self.json_message("HDL LINK 尚未配置", status_code=400)
+        objects = body.get("objects") or []
+        if not objects:
+            return self.json_message("objects 不能为空", status_code=400)
+        try:
+            result = await async_drive_down(hass, coordinator, objects)
+        except Exception as err:  # noqa: BLE001
+            LOGGER.exception("执行下行失败")
+            return self.json({"error": f"{type(err).__name__}: {err}"}, status_code=500)
+        return self.json(result)
+
+
+class HdlDriverEditView(HomeAssistantView):
+    """POST /api/hdl_link/driver/edit —— 编辑已注册功能（改名 / 换物模型 / 删除）。"""
+
+    url = "/api/hdl_link/driver/edit"
+    name = "api:hdl_link:driver_edit"
+    requires_auth = True
+
+    async def post(self, request: web.Request) -> web.Response:
+        hass: HomeAssistant = request.app["hass"]
+        try:
+            body = await request.json()
+        except ValueError:
+            return self.json_message("请求体必须是 JSON", status_code=400)
+        coordinator = _coordinator(hass, body.get("entry_id"))
+        if coordinator is None:
+            return self.json_message("HDL LINK 尚未配置", status_code=400)
+        entity_id = body.get("entity_id") or ""
+        action = body.get("action") or ""
+        if not entity_id or not action:
+            return self.json_message("需要 entity_id 与 action", status_code=400)
+        try:
+            result = await async_edit_function(
+                hass,
+                coordinator,
+                entity_id=entity_id,
+                action=action,
+                name=body.get("name"),
+                spk=body.get("spk"),
+            )
+        except Exception as err:  # noqa: BLE001
+            LOGGER.exception("编辑功能失败")
+            return self.json({"error": f"{type(err).__name__}: {err}"}, status_code=500)
+        status = 200 if result.get("ok") else 400
+        return self.json(result, status_code=status)
+
+
+class HdlDriverRegisterView(HomeAssistantView):
+    """POST /api/hdl_link/driver/register —— 把 sid 以 driver_name 上报网关（验证驱动是否就绪）。"""
+
+    url = "/api/hdl_link/driver/register"
+    name = "api:hdl_link:driver_register"
+    requires_auth = True
+
+    async def post(self, request: web.Request) -> web.Response:
+        hass: HomeAssistant = request.app["hass"]
+        try:
+            body = await request.json()
+        except ValueError:
+            body = {}
+        coordinator = _coordinator(hass, body.get("entry_id"))
+        if coordinator is None:
+            return self.json_message("HDL LINK 尚未配置", status_code=400)
+        driver_name = body.get("driver_name") or "ha"
+        result = await async_push_driver_config(hass, coordinator, driver_name)
+        return self.json(result, status_code=200 if result.get("ok") else 400)
+
+
+class HdlEventMapView(HomeAssistantView):
+    """GET/POST /api/hdl_link/event_map —— HDL 场景/逻辑 SID ↔ HA 动作映射。
+
+    GET 回 {"scenes": {...}, "seen": [...]}；POST {"sid","entity_id","action"} 设置或删除。
+    """
+
+    url = "/api/hdl_link/event_map"
+    name = "api:hdl_link:event_map"
+    requires_auth = True
+
+    async def get(self, request: web.Request) -> web.Response:
+        hass: HomeAssistant = request.app["hass"]
+        from .events import async_load
+
+        data = await async_load(hass)
+        return self.json({
+            "scenes": data.get("scenes") or {},
+            "seen": data.get("seen") or [],
+            "actions": ["turn_on", "turn_off", "toggle", "open", "close", "run"],
+        })
+
+    async def post(self, request: web.Request) -> web.Response:
+        hass: HomeAssistant = request.app["hass"]
+        from .events import async_set_mapping
+
+        try:
+            body = await request.json()
+        except ValueError:
+            return self.json_message("请求体必须是 JSON", status_code=400)
+        result = await async_set_mapping(
+            hass,
+            str(body.get("sid") or ""),
+            entity_id=body.get("entity_id"),
+            action=body.get("action") or "toggle",
+            name=body.get("name"),
+        )
+        return self.json(result, status_code=200 if result.get("ok") else 400)
+
+
+VIEWS = (
+    HdlScanView(),
+    HdlProvisionView(),
+    HdlMappingView(),
+    HdlEventMapView(),
+    HdlDriverDevicesView(),
+    HdlDriverDownView(),
+    HdlDriverEditView(),
+    HdlDriverRegisterView(),
+)

@@ -138,8 +138,9 @@ class HdlCoordinator(DataUpdateCoordinator[dict[str, dict[str, str]]]):
         """HDL 侧动作事件（场景执行 / 逻辑动作）。
 
         这是 HDL → HA 唯一可用的上行通道：网关执行场景时会推
-        `/user/{gw}/custom/scene/status/up`（本地加密），HA 收到后触发
-        `hdl_link_hdl_event` 事件，由用户在自动化里决定要控哪些 HA 设备。
+        `/user/{gw}/custom/scene/status/up`（本地加密）。收到后：
+        1. 广播 `hdl_link_hdl_event`，供自定义自动化使用；
+        2. 按 sid 查本地映射表，命中就直接下发 HA 控制（等效"面板控制 HA 设备"）。
         """
         objects = body.get("objects")
         items = objects if isinstance(objects, list) else ([objects] if isinstance(objects, dict) else [])
@@ -156,8 +157,15 @@ class HdlCoordinator(DataUpdateCoordinator[dict[str, dict[str, str]]]):
                 "raw": item,
             }
             LOGGER.debug("HDL 事件: %s", payload)
-            if hass is not None:
-                hass.bus.async_fire(f"{DOMAIN}_hdl_event", payload)
+            if hass is None:
+                continue
+            hass.bus.async_fire(f"{DOMAIN}_hdl_event", payload)
+            try:
+                from .events import async_apply_event
+
+                hass.async_create_task(async_apply_event(hass, payload))
+            except Exception as err:  # noqa: BLE001 - 事件处理失败不能打断读线程
+                LOGGER.debug("处理事件映射失败: %s", err)
 
     # ------------------------------------------------------------------ 轮询
     async def _async_update_data(self) -> dict[str, dict[str, str]]:
