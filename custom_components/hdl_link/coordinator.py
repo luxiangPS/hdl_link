@@ -171,7 +171,8 @@ class HdlCoordinator(DataUpdateCoordinator[dict[str, dict[str, str]]]):
             }
             LOGGER.debug("HDL 上行: %s", payload)
             if kind == "down":
-                LOGGER.info("收到网关下行控制 sid=%s status=%s", sid, item.get("status"))
+                # 用 WARNING 级别：HA 默认只把 WARNING 以上写进日志页，INFO 会被过滤
+                LOGGER.warning("HDL LINK 收到网关下行控制 sid=%s status=%s", sid, item.get("status"))
             if hass is not None:
                 hass.bus.async_fire(f"{DOMAIN}_hdl_event", payload)
         if hass is None:
