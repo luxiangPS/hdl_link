@@ -37,11 +37,12 @@ def main():
                  json.dumps({"objects": [{"sid": "l1", "status": "on"}]}).encode())
     check("逻辑事件也走事件回调", len(events) == 1, events)
 
-    print("[3] 属性上报仍然走 push")
+    print("[3] 属性上报：既进 push，也进功能绑定")
     pushes.clear()
+    events.clear()
     lk._dispatch("/base/2109921361567219716/thing/property/up",
                  json.dumps({"objects": [{"sid": "s1", "status": [{"key": "on_off", "value": "on"}]}]}).encode())
-    check("属性上报未被事件劫持", events and len(events) == 1, events)
+    check("属性上报也交给功能绑定", events and len(events) == 1, events)
     check("属性上报进 push_handler", len(pushes) == 1, pushes)
 
     print("[4] 未配置密钥的加密事件帧：不崩溃、不触发")

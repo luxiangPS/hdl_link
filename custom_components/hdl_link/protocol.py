@@ -217,8 +217,16 @@ class LinkClient:
         if topic.endswith("_reply"):
             LOGGER.debug("未匹配的响应 %s: %.200s", topic, raw)
             return
-        # 主动上报：交给协调器刷新实体状态（无需 10s 轮询即可跟手）
+        # 功能点状态上报：既交给协调器刷新实体，也交给事件回调做「直接功能绑定」
         objects = body.get("objects")
+        items = objects if isinstance(objects, list) else ([objects] if isinstance(objects, dict) else [])
+        if items and topic.endswith(_UP_SUFFIX) and self.event_handler is not None:
+            try:
+                self.event_handler(topic, {"objects": items, "kind": "function"})
+            except Exception as err:  # noqa: BLE001 - 回调异常不能影响读线程
+                LOGGER.debug("处理功能上报失败: %s", err)
+
+        # 主动上报：交给协调器刷新实体状态（无需 10s 轮询即可跟手）
         if objects and self.push_handler is not None:
             try:
                 self.push_handler(objects if isinstance(objects, list) else [objects])

@@ -5,6 +5,26 @@ from __future__ import annotations
 from typing import Any
 
 
+def normalize_status(status: Any) -> list[dict[str, str]]:
+    """把各种形态的 status 归一成 [{"key","value"}]（list / dict / None 都能吃）。"""
+    out: list[dict[str, str]] = []
+    if isinstance(status, list):
+        for item in status:
+            if isinstance(item, dict) and item.get("key") is not None:
+                out.append({"key": str(item["key"]), "value": str(item.get("value"))})
+    elif isinstance(status, dict):
+        for key, value in status.items():
+            out.append({"key": str(key), "value": str(value)})
+    return out
+
+
+def should_fire(trigger: str, values: dict[str, str], status: list[dict[str, str]]) -> bool:
+    """功能点上报是否值得下发：trigger=any|on|off，空 status 不下发。"""
+    if trigger in ("on", "off") and values.get("on_off") != trigger:
+        return False
+    return bool(status)
+
+
 def service_calls(info: dict[str, Any], status: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """把 HDL 的一条 status 数组翻译成 HA 服务调用列表。
 

@@ -205,26 +205,23 @@ class HdlDriverRegisterView(HomeAssistantView):
         return self.json(result, status_code=200 if result.get("ok") else 400)
 
 
-class HdlEventMapView(HomeAssistantView):
-    """GET/POST /api/hdl_link/event_map —— HDL 场景/逻辑 SID ↔ HA 动作映射。
+class HdlBindingView(HomeAssistantView):
+    """GET/POST /api/hdl_link/binding —— HDL 功能点 SID ↔ HA 实体 直接绑定。
 
-    GET 回 {"scenes": {...}, "seen": [...]}；POST {"sid","entity_id","action"} 设置或删除。
+    GET  → {"sids": {...}, "seen": [...], "modes", "actions", "triggers"}
+    POST → {"sid", "entity_id", "mode":"follow|action", "action", "trigger":"any|on|off", "spk"}
+    entity_id 传 null 表示删除该 sid 的绑定。
     """
 
-    url = "/api/hdl_link/event_map"
-    name = "api:hdl_link:event_map"
+    url = "/api/hdl_link/binding"
+    name = "api:hdl_link:binding"
     requires_auth = True
 
     async def get(self, request: web.Request) -> web.Response:
         hass: HomeAssistant = request.app["hass"]
-        from .events import async_load
+        from .events import async_bindings
 
-        data = await async_load(hass)
-        return self.json({
-            "scenes": data.get("scenes") or {},
-            "seen": data.get("seen") or [],
-            "actions": ["turn_on", "turn_off", "toggle", "open", "close", "run"],
-        })
+        return self.json(await async_bindings(hass))
 
     async def post(self, request: web.Request) -> web.Response:
         hass: HomeAssistant = request.app["hass"]
@@ -238,16 +235,27 @@ class HdlEventMapView(HomeAssistantView):
             hass,
             str(body.get("sid") or ""),
             entity_id=body.get("entity_id"),
-            action=body.get("action") or "toggle",
+            mode=str(body.get("mode") or "follow"),
+            action=str(body.get("action") or "toggle"),
+            trigger=str(body.get("trigger") or "any"),
+            spk=body.get("spk"),
             name=body.get("name"),
         )
         return self.json(result, status_code=200 if result.get("ok") else 400)
+
+
+class HdlEventMapView(HdlBindingView):
+    """旧地址 `/api/hdl_link/event_map`，语义已改为功能点直接绑定。"""
+
+    url = "/api/hdl_link/event_map"
+    name = "api:hdl_link:event_map"
 
 
 VIEWS = (
     HdlScanView(),
     HdlProvisionView(),
     HdlMappingView(),
+    HdlBindingView(),
     HdlEventMapView(),
     HdlDriverDevicesView(),
     HdlDriverDownView(),

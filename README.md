@@ -212,19 +212,33 @@ python tools\hdl_ha_driver.py --gateway 192.168.1.151 --name ha ^
 
 ---
 
-## 13. 场景 SID → HA 动作（不用写自动化也能"面板控 HA"）
+## 13. 功能点直接绑定（HDL 功能 SID → HA 实体，不走场景中转）
 
-面板键绑定场景后，网关推 `scene/status/up`；集成按 **SID** 查本地映射表，命中就直接调 HA 服务：
+把任意一个 HDL **功能点 SID** 直接绑到 HA 实体，状态一变就下发 HA：
+
+- `mode="follow"`（默认）：状态原样跟随 —— 开关/亮度/色温/RGB/窗帘位置/空调温度模式风速；
+- `mode="action"`：状态变化只触发一个动作（`toggle` / `turn_on` / `open` / `run` …），面板键当遥控器。
+
+上行来源（实机验证）：`/base/{gw}/thing/property/up` 功能点状态上报，以及
+`/user/{gw}/custom/{scene,logic}/status/up` 场景/逻辑事件；两路都按 **SID** 判断，
+命中绑定表才下发，命不中只记录到 `seen`（方便你挑 SID）。自己注册进网关的 HA 设备
+SID 会被自动排除，避免自己发 up 造成回环。
 
 ```bash
-# 查看收到的场景/逻辑 SID（seen 里会自动累积）
-curl -H "Authorization: Bearer <token>" http://<ha>:8123/api/hdl_link/event_map
+# 1) 先在面板上操作一次，让集成把功能 SID 记进 seen
+curl -H "Authorization: Bearer <token>" http://<ha>:8123/api/hdl_link/binding
 
-# 绑定：场景 sid → 开灯
+# 2) 直接绑定：功能 sid → HA 灯，跟随
 curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
-  -d '{"sid":"0201036AFD43B20A0A0100011100","entity_id":"light.keting","action":"turn_on"}' \
-  http://<ha>:8123/api/hdl_link/event_map
+  -d '{"sid":"0201016AFD412506000000000003","entity_id":"light.keting","mode":"follow"}' \
+  http://<ha>:8123/api/hdl_link/binding
+
+# 3) 面板键当遥控器：只在"开"的时候触发 toggle
+curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{"sid":"<面板按键功能sid>","entity_id":"light.keting","mode":"action","action":"toggle","trigger":"on"}' \
+  http://<ha>:8123/api/hdl_link/binding
 ```
 
-`action` 可选：`turn_on / turn_off / toggle / open / close / run`。
-删除映射：同接口传 `entity_id: null`。
+`mode`：`follow / action`；`action`：`turn_on / turn_off / toggle / open / close / run`；
+`trigger`：`any / on / off`。删除绑定：同接口传 `"entity_id": null`。
+旧地址 `/api/hdl_link/event_map` 仍可用，语义已改为功能点绑定。

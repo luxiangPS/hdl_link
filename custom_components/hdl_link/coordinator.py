@@ -135,37 +135,43 @@ class HdlCoordinator(DataUpdateCoordinator[dict[str, dict[str, str]]]):
             self.async_set_updated_data(data)
 
     def _on_event(self, topic: str, body: dict[str, Any]) -> None:
-        """HDL 侧动作事件（场景执行 / 逻辑动作）。
+        """HDL 上行事件 → 直接功能绑定。
 
-        这是 HDL → HA 唯一可用的上行通道：网关执行场景时会推
-        `/user/{gw}/custom/scene/status/up`（本地加密）。收到后：
-        1. 广播 `hdl_link_hdl_event`，供自定义自动化使用；
-        2. 按 sid 查本地映射表，命中就直接下发 HA 控制（等效"面板控制 HA 设备"）。
+        两条上行通道都走这里：
+        - `/base/{gw}/thing/property/up`：功能点状态上报（body.objects）；
+        - `/user/{gw}/custom/{scene,logic}/status/up`：场景/逻辑执行事件。
+        统一按 **SID** 判断：命中绑定表就直接下发 HA 控制，命不中只记 seen。
         """
         objects = body.get("objects")
         items = objects if isinstance(objects, list) else ([objects] if isinstance(objects, dict) else [])
+        if not items:
+            return
+        kind = body.get("kind") or ("scene" if "scene" in topic else "logic")
         hass = getattr(self, "hass", None)
         for item in items:
             if not isinstance(item, dict):
                 continue
+            sid = str(item.get("sid") or item.get("id") or "")
             payload = {
                 "gateway": self.gw_id or "",
-                "kind": "scene" if "scene" in topic else "logic",
-                "sid": str(item.get("sid") or item.get("id") or ""),
+                "kind": kind,
+                "sid": sid,
                 "name": item.get("name") or "",
-                "status": str(item.get("status") or ""),
                 "raw": item,
             }
-            LOGGER.debug("HDL 事件: %s", payload)
-            if hass is None:
-                continue
-            hass.bus.async_fire(f"{DOMAIN}_hdl_event", payload)
-            try:
-                from .events import async_apply_event
+            LOGGER.debug("HDL 上行: %s", payload)
+            if hass is not None:
+                hass.bus.async_fire(f"{DOMAIN}_hdl_event", payload)
+        if hass is None:
+            return
+        try:
+            from .events import async_handle
 
-                hass.async_create_task(async_apply_event(hass, payload))
-            except Exception as err:  # noqa: BLE001 - 事件处理失败不能打断读线程
-                LOGGER.debug("处理事件映射失败: %s", err)
+            hass.async_create_task(
+                async_handle(hass, items, kind=kind, own_sids=set(self.entities.keys()))
+            )
+        except Exception as err:  # noqa: BLE001 - 事件处理失败不能打断读线程
+            LOGGER.debug("处理功能绑定失败: %s", err)
 
     # ------------------------------------------------------------------ 轮询
     async def _async_update_data(self) -> dict[str, dict[str, str]]:
