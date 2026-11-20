@@ -282,3 +282,41 @@ curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/js
 - 未绑定的场景/逻辑事件会打 WARNING 并把 sid 记进 `seen`，面板下拉里就能选，不用手工抄。
 - 事件每次按下都执行，不参与状态去重（连按两次就是两次）。
 - `logic/status/up` 的 `status=success`、`enable=true` 同样按一次事件处理。
+## 15. 现场排查：`hdl_link.scene_list`
+
+面板按了没反应，先用一个服务把事实摊开（不用登网关、不用看日志）：
+
+```yaml
+action: hdl_link.scene_list
+```
+
+返回内容（示例）：
+
+```json
+{
+  "count": 3,
+  "bound": 1,
+  "unbound": ["回家走廊灯", "看电影"],
+  "scenes": [
+    {"sid": "0201036AFD43B20A0A0100011100", "name": "回家走廊灯", "status": "off",
+     "bound": true, "entity_id": "light.ha_lamp", "mode": "action",
+     "action": "toggle", "trigger": "any"}
+  ],
+  "orphan_bindings": [{"sid": "0201036AFD43B20A0A0100011199", "entity_id": "light.old"}]
+}
+```
+
+判读方式：
+
+- `unbound` 里的场景：面板按了也不会动，因为 HA 侧没有绑定 → 用 `hdl_link.bind` 补绑。
+- `orphan_bindings` 里的 sid：HA 绑了，但网关里已经没有这个场景（改名/重建/被覆盖）→ 重新绑新 sid。
+- `scenes` 全为空：面板键根本没指向任何场景，问题在 HDL 侧（App/Studio 的按键配置）。
+
+## 16. 不要用 LINK 写场景（重要）
+
+`scene/add` 在实测中表现为**整表替换**语义：一次 `scene/add` 之后，网关里原有的场景会消失（两次实证）。因此在"只用开放 LINK 协议"的前提下：
+
+- 集成**只读场景**（`scene/list/get`、`scene/get`），运行期永不调用 `scene/add` / `scene/delete`；
+- 需要新场景就在 HDL App / Studio 里建（那里是网关原生语义，不会误删），建完集成这边一条 `hdl_link.bind` 就接上。
+
+这样避免了"一条命令抹掉客户现场全部场景"的灾难风险。
