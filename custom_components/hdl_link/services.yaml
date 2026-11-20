@@ -11,13 +11,13 @@ scan:
 
 provision:
   name: 同步设备到 HDL 网关
-  description: 把勾选的 HA 设备写成 HDL 物理模型（oid 由网关自动生成），并把勾选的功能写成功能点（sid = oid + 两位序号）。
+  description: 把勾选的 HA 设备写成 HDL 物理模型（oid 由 device_id 派生），并把勾选的功能写成功能点（sid = oid + 序号段），写入后立即上报一次状态让功能点上线。
   fields:
     devices:
       name: 设备与功能
-      description: 设备数组，每项包含 device_id、name、model 与 functions（entity_id、name、spk）。
+      description: 设备数组，每项包含 device_id、name、model、domain 与 functions（entity_id、name、spk）。
       required: true
-      example: '[{"device_id":"abc","name":"客厅灯","model":"米家吸顶灯","functions":[{"entity_id":"light.keting","name":"客厅灯","spk":"light.dimming"}]}]'
+      example: '[{"device_id":"abc","name":"客厅灯","model":"米家吸顶灯","domain":"light","functions":[{"entity_id":"light.keting","name":"客厅灯","spk":"light.dimming"}]}]'
       selector:
         object:
     dry_run:
@@ -26,6 +26,17 @@ provision:
       default: true
       selector:
         boolean:
+    entry_id:
+      name: 配置条目
+      description: 多网关时指定目标网关。
+      example: 01JABCDEF
+      selector:
+        text:
+
+sync:
+  name: 上报已同步设备状态
+  description: 把已写入网关的 HA 实体当前状态再上报一次（property/up）。网关只认这条上报来维持功能点在线，建议在自动化里定时调用。
+  fields:
     entry_id:
       name: 配置条目
       description: 多网关时指定目标网关。

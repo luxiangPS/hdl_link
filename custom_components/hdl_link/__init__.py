@@ -27,7 +27,7 @@ from .const import CONF_GW_ID, DOMAIN, MANUFACTURER
 from .coordinator import HdlCoordinator
 from .http_api import VIEWS
 from .protocol import LinkError
-from .provision import async_provision
+from .provision import async_provision, async_sync_states
 from .scan import async_scan
 
 LOGGER = logging.getLogger(__name__)
@@ -47,10 +47,11 @@ PANEL_URL_PATH = "hdl-device-sync"
 PANEL_COMPONENT = "hdl-link-provision"
 STATIC_URL = "/hdl_link_static"
 PANEL_JS = Path(__file__).parent / "frontend"
-PANEL_VERSION = "2.4.0"
+PANEL_VERSION = "2.5.0"
 
 SERVICE_SCAN = "scan"
 SERVICE_PROVISION = "provision"
+SERVICE_SYNC = "sync"
 
 SCAN_SCHEMA = vol.Schema({vol.Optional("entry_id"): cv.string})
 PROVISION_SCHEMA = vol.Schema(
@@ -197,6 +198,22 @@ async def _async_setup_provision(hass: HomeAssistant) -> None:
             SERVICE_PROVISION,
             _handle_provision,
             schema=PROVISION_SCHEMA,
+            supports_response=SupportsResponse.OPTIONAL,
+        )
+
+    async def _handle_sync(call: ServiceCall) -> dict:
+        coordinator = _coordinator(call.data.get("entry_id"))
+        if coordinator is None:
+            raise ValueError("HDL LINK 尚未配置")
+        pushed = await async_sync_states(hass, coordinator)
+        return {"pushed": pushed}
+
+    if not hass.services.has_service(DOMAIN, SERVICE_SYNC):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_SYNC,
+            _handle_sync,
+            schema=SCAN_SCHEMA,
             supports_response=SupportsResponse.OPTIONAL,
         )
 

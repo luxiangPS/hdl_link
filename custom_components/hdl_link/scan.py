@@ -273,6 +273,7 @@ async def async_scan(hass: HomeAssistant) -> dict[str, Any]:
                 "name": device.name_by_user or device.name or device.id,
                 "model": device.model or "",
                 "manufacturer": device.manufacturer or "",
+                "domain": rows[0]["domain"],
                 "area": _area_name(area_reg, device.area_id),
                 "integration": integration,
                 "integration_domain": integration_domain,

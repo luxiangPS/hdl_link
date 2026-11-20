@@ -1,19 +1,17 @@
 """把 HA 侧勾选的设备与功能写入 HDL 网关（物理模型 oid + 功能点 sid）。
 
-实测结论（2026-11-19，MGWIP.430 / 010105003DF6F100）：
-- 读：device/list/get、function/list/get、function/attribute/get 走 TCP 8586 稳定可用；
-- 写：device/add 在本地 TCP 上返回 code=0，但设备列表不变化（网关不落库），
-      且 remoteconfig/edit（文档标注"远程时 MQTT 通讯时使用"）在本地 TCP 无响应。
-  因此本模块的写入按"发报文 -> 回读校验 -> 如实标注是否真正生效"实现，
-  绝不把 code=0 当成写入成功。
+2026-11-19/20 在 MGWIP.430（192.168.1.151:8586，oid 010105003DF6F100）实测确认的事实：
 
-链路（复用现有 LINK TCP 通道，帧格式 Topic/Length/JSON）：
-    remoteconfig/edit        打开设备编辑开关（顶层字段 driver_name/enable）
-    device/list/get          写入前基线
-    device/add               每台 HA 设备建一个物理模型
-    device/list/get          回读差分取自动生成的 oid（add_reply 不返回 oid）
-    function/attribute/add   每个功能一个 sid = oid + 12 位序号
-    function/list/get        回读校验 sid 是否真的出现
+- device/add、function/attribute/add 走本地 TCP 8586 **确实落库**（code=0 + 回读确认）；
+- oid 由客户端自带（16 位十六进制），sid = oid(16) + 12 位，网关原样保存；
+- 网关不认 src / status / online 字段来判定在线：功能点建好就是 online=false；
+- **让功能点上线的唯一办法是客户端主动上报属性**：
+  /base/{gw}/thing/property/up + {"objects":[{"sid":..., "status":[{"key":...,"value":...}]}]}
+  上报后回读 online=true 且 status 有值，property/down 才返回 code=0；
+- 但 property/down 不会把下行帧推给 LINK 客户端（双连接验证），状态也不会被改写，
+  所以桥接是**状态驱动**：HA → HDL 走得通（up 上报），HDL → HA 需要网关侧驱动。
+
+因此本模块按"发报文 → 回读校验 → 上报在线 → 如实标注"实现，绝不把 code=0 当成功。
 """
 
 from __future__ import annotations
@@ -23,15 +21,16 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 
+from . import bridge
 from .const import (
-    SPK_ATTRIBUTE_SCHEMA,
     STORAGE_KEY,
     STORAGE_VERSION,
     TOPIC_DEVICE_ADD,
     TOPIC_DEVICE_LIST,
     TOPIC_FUNCTION_ADD,
     TOPIC_FUNCTION_LIST,
-    TOPIC_REMOTE_CONFIG_EDIT,
+    TOPIC_FUNCTION_ATTR,
+    TOPIC_PROPERTY_UP,
 )
 from .protocol import LinkError
 
@@ -60,28 +59,69 @@ async def _device_oids(gateway: Any) -> set[str]:
     return {str(d.get("oid")) for d in _objs(resp) if isinstance(d, dict) and d.get("oid")}
 
 
-async def _function_sids(gateway: Any) -> set[str]:
+async def _functions(gateway: Any) -> dict[str, dict[str, Any]]:
     resp = await gateway.client.async_request(TOPIC_FUNCTION_LIST.format(gw=gateway.oid), timeout=15)
-    return {str(f.get("sid")) for f in _objs(resp) if isinstance(f, dict) and f.get("sid")}
+    return {
+        str(f.get("sid")): f
+        for f in _objs(resp)
+        if isinstance(f, dict) and f.get("sid")
+    }
 
 
-def _attr_payload(spk: str, provided: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
-    """按 spk 生成 attributes；实测网关用 data_type=boolean/number/string + value 枚举。"""
-    schema = provided or SPK_ATTRIBUTE_SCHEMA.get(spk, [])
-    out: list[dict[str, Any]] = []
-    for item in schema:
-        key = item.get("key")
-        if not key:
+async def _pull_state(hass: HomeAssistant, coordinator: Any, entity_id: str) -> list[dict[str, Any]]:
+    """把 HA 当前状态按 spk 属性裁剪成 up 报文里的 status 数组。"""
+    state = hass.states.get(entity_id)
+    if state is None:
+        return []
+    spk = state.attributes.get("hdl_spk") or ""
+    if not spk:
+        return []
+    status: list[dict[str, Any]] = []
+    for attr in bridge.SPK_PROFILES.get(spk, {}).get("attrs", []):
+        key = attr["key"]
+        raw: Any = None
+        if key == "on_off":
+            raw = state.state
+        elif key in ("brightness", "cct", "rgb", "rgbw"):
+            raw = state.attributes.get(key) or state.attributes.get("brightness")
+        elif key == "percent":
+            raw = state.attributes.get("current_position")
+        elif key in ("temperature", "humidity", "illuminance", "co2", "pm25"):
+            raw = state.state
+        elif key == "people_status":
+            raw = state.state
+        elif key == "door_status":
+            raw = state.state
+        elif key == "room_temp":
+            raw = state.attributes.get("current_temperature")
+        elif key == "set_temp":
+            raw = state.attributes.get("temperature")
+        elif key in ("mode", "fan"):
+            raw = state.state if key == "mode" else state.attributes.get("fan_mode")
+        if raw is None:
             continue
-        dtype = str(item.get("data_type") or "string")
-        entry: dict[str, Any] = {"key": key, "data_type": dtype}
-        if dtype == "boolean":
-            entry["value"] = ["true", "false"]
-        elif "min" in item or "max" in item:
-            entry["min"] = str(item.get("min", "0"))
-            entry["max"] = str(item.get("max", "100"))
-        out.append(entry)
-    return out
+        value = bridge.to_hdl_value(spk, key, raw)
+        if value is not None:
+            status.append({"key": key, "value": value})
+    return status
+
+
+async def async_report_up(gateway: Any, sid: str, status: list[dict[str, Any]]) -> bool:
+    """上报一条功能点状态；这是让 sid 上线（online=true）的唯一手段。"""
+    if not status:
+        return False
+    try:
+        resp = await gateway.client.async_request(
+            TOPIC_PROPERTY_UP.format(gw=gateway.oid),
+            bridge.up_body(sid, status),
+            timeout=8,
+        )
+    except LinkError as err:
+        LOGGER.debug("property/up 失败 %s: %s", sid, err)
+        return False
+    # 该主题通常不回包，回包与否都不作为失败依据；以回读 online 为准
+    LOGGER.debug("property/up %s -> %s", sid, resp)
+    return True
 
 
 async def async_provision(
@@ -93,8 +133,8 @@ async def async_provision(
 ) -> dict[str, Any]:
     """按勾选结果写入网关，返回计划、逐项状态与错误。
 
-    selection: {"devices": [{"device_id","name","model","functions":[
-        {"entity_id","name","spk","attributes":[...]}]}]}
+    selection: {"devices": [{"device_id","name","model","domain",
+               "functions":[{"entity_id","name","spk"}]}]}
     """
     gateway = coordinator.gateway
     gw = gateway.oid
@@ -107,7 +147,6 @@ async def async_provision(
     if not devices_in:
         return {"dry_run": dry_run, "plan": [], "errors": ["没有勾选任何功能"], "warnings": []}
 
-    # ---------------- 基线（演练也要读，用于判断"网关是否真的接受"）
     try:
         oids_before = await _device_oids(gateway)
     except LinkError as err:
@@ -118,102 +157,70 @@ async def async_provision(
             "warnings": [],
         }
 
-    if not dry_run:
-        try:
-            sids_before = await _function_sids(gateway)
-        except LinkError:
-            sids_before = set()
+    funcs_before = await _functions(gateway) if not dry_run else {}
 
-        # 打开设备编辑开关（文档：driver_name=buspro/knx，enable=OID 列表或 enable/disable）
-        for driver in ("buspro", "a"):
-            try:
-                resp = await gateway.client.async_request(
-                    TOPIC_REMOTE_CONFIG_EDIT.format(gw=gw),
-                    {"driver_name": driver, "enable": "enable"},
-                    timeout=6,
-                )
-                if _ok(resp):
-                    break
-            except LinkError as err:
-                LOGGER.debug("remoteconfig/edit(%s) 无响应: %s", driver, err)
-    else:
-        sids_before = set()
-
-    seq = 0
-    for device in devices_in:
-        seq += 1
+    for seq, device in enumerate(devices_in, start=1):
         dev_name = device.get("name") or device.get("device_id") or f"HA-{seq}"
-        oid = ""
+        domain = (device.get("domain") or "").strip()
+        device_key = str(device.get("device_id") or dev_name)
+        oid = bridge.device_oid(device_key)
+
         dev_entry: dict[str, Any] = {
             "device_id": device.get("device_id"),
             "name": dev_name,
-            "oid": "",
+            "oid": oid,
             "applied": False,
             "functions": [],
         }
 
-        # ------------------------------------------------ 新增物理模型
         if dry_run:
-            oid = f"<new-device-oid>"
             dev_entry["oid"] = oid
         else:
-            body = {
-                "objects": [
-                    {
-                        "device_name": dev_name,
-                        "device_model": (device.get("model") or "HA-DEVICE")[:32],
-                        "device_mac": "000000000000",
-                        "addresses": "0a00",
-                        "driver_code": "a",
-                        "src": "a",
-                    }
-                ]
-            }
-            try:
-                resp = await gateway.client.async_request(
-                    TOPIC_DEVICE_ADD.format(gw=gw), body, timeout=12
-                )
-            except LinkError as err:
-                errors.append(f"设备「{dev_name}」新增超时: {err}")
-                plan.append(dev_entry)
-                continue
-
-            if not _ok(resp):
-                errors.append(f"设备「{dev_name}」新增被拒绝: {resp}")
-                plan.append(dev_entry)
-                continue
-
-            # 回读差分：add_reply 不返回 oid，只能靠设备列表差分
-            try:
-                oids_after = await _device_oids(gateway)
-            except LinkError:
-                oids_after = set(oids_before)
-            new_oids = sorted(oids_after - oids_before)
-            if new_oids:
-                oid = new_oids[-1]
-                oids_before.add(oid)
+            if oid in oids_before:
                 dev_entry["applied"] = True
+                dev_entry["note"] = "设备已存在（复用 oid）"
             else:
-                # code=0 但设备列表没变 —— 明确标注未生效，不假装成功
-                warnings.append(
-                    f"设备「{dev_name}」device/add 返回 Success，但网关设备列表未新增，"
-                    "判定为未生效（设备编辑需走 MQTT 远端通道）"
-                )
-                dev_entry["applied"] = False
-            dev_entry["oid"] = oid
+                payload = bridge.device_payload(oid, domain, device_key, dev_name)
+                body = {"objects": [payload]}
+                try:
+                    resp = await gateway.client.async_request(
+                        TOPIC_DEVICE_ADD.format(gw=gw), body, timeout=12
+                    )
+                except LinkError as err:
+                    errors.append(f"设备「{dev_name}」新增超时: {err}")
+                    plan.append(dev_entry)
+                    continue
 
-        # ------------------------------------------------ 逐功能点
+                if not _ok(resp):
+                    errors.append(f"设备「{dev_name}」新增被拒绝: {resp}")
+                    plan.append(dev_entry)
+                    continue
+
+                try:
+                    oids_after = await _device_oids(gateway)
+                except LinkError:
+                    oids_after = set(oids_before)
+                if oid in oids_after:
+                    dev_entry["applied"] = True
+                    oids_before.add(oid)
+                else:
+                    warnings.append(f"设备「{dev_name}」device/add 返回 Success，但回读未见该 oid")
+                    dev_entry["applied"] = False
+
         for idx, func in enumerate(device.get("functions") or [], start=1):
             spk = (func.get("spk") or "").strip()
             func_name = func.get("name") or func.get("entity_id")
+            entity_id = func.get("entity_id") or ""
+
             if not spk:
-                warnings.append(f"「{dev_name}」跳过功能「{func_name}」：未选择 HDL 功能类型")
+                spk = bridge.spk_for_entity(domain or entity_id.split(".")[0])
+            if spk not in bridge.SPK_PROFILES:
+                warnings.append(f"「{dev_name}」跳过功能「{func_name}」：未知 HDL 类型 {spk}")
                 continue
 
-            sid = f"{oid}{idx:012d}" if oid else ""
-
+            sid = bridge.function_sid(oid, idx)
             item = {
-                "entity_id": func.get("entity_id"),
+                "entity_id": entity_id,
                 "name": func_name,
                 "spk": spk,
                 "sid": sid,
@@ -231,47 +238,42 @@ async def async_provision(
                 dev_entry["functions"].append(item)
                 continue
 
-            if sid in sids_before:
-                item["note"] = "sid 已存在，跳过"
-                dev_entry["functions"].append(item)
-                continue
-
-            body = {
-                "objects": [
-                    {
-                        "oid": oid,
-                        "sid": sid,
-                        "name": str(func_name)[:32],
-                        "spk": spk,
-                        "omodel": (device.get("model") or "HA-DEVICE")[:32],
-                        "online": "true",
-                        "attributes": _attr_payload(spk, func.get("attributes")),
-                    }
-                ]
-            }
-            try:
-                resp = await gateway.client.async_request(
-                    TOPIC_FUNCTION_ADD.format(gw=gw), body, timeout=12
-                )
-                if not _ok(resp):
-                    item["note"] = f"网关拒绝: {resp}"
-                    errors.append(f"功能「{func_name}」新增失败: {resp}")
-                else:
-                    # 回读校验
-                    try:
-                        sids_after = await _function_sids(gateway)
-                    except LinkError:
-                        sids_after = sids_before
-                    if sid in sids_after:
+            if sid in funcs_before:
+                item["ok"] = True
+                item["note"] = "sid 已存在（复用）"
+            else:
+                body = bridge.function_payload(oid, sid, spk, func_name, domain)
+                try:
+                    resp = await gateway.client.async_request(
+                        TOPIC_FUNCTION_ADD.format(gw=gw), body, timeout=12
+                    )
+                    if not _ok(resp):
+                        item["note"] = f"网关拒绝: {str(resp)[:120]}"
+                        errors.append(f"功能「{func_name}」新增失败: {resp}")
+                        dev_entry["functions"].append(item)
+                        continue
+                    funcs_before.update(await _functions(gateway))
+                    if sid in funcs_before:
                         item["ok"] = True
                         item["note"] = "回读确认"
-                        sids_before.add(sid)
                     else:
-                        item["note"] = "返回 Success 但功能列表未出现（未生效）"
+                        item["note"] = "返回 Success 但功能列表未出现"
                         warnings.append(f"功能「{func_name}」未真正写入网关")
-            except LinkError as err:
-                item["note"] = str(err)[:200]
-                errors.append(f"功能「{func_name}」新增超时: {err}")
+                        dev_entry["functions"].append(item)
+                        continue
+                except LinkError as err:
+                    item["note"] = str(err)[:200]
+                    errors.append(f"功能「{func_name}」新增超时: {err}")
+                    dev_entry["functions"].append(item)
+                    continue
+
+            # 关键一步：上报一次属性，让 sid 上线（网关只认这条）
+            if entity_id:
+                status = await _pull_state(hass, coordinator, entity_id)
+                if status:
+                    await async_report_up(gateway, sid, status)
+                    item["report"] = len(status)
+
             dev_entry["functions"].append(item)
 
         plan.append(dev_entry)
@@ -289,8 +291,58 @@ async def async_provision(
     }
 
 
+async def async_sync_states(hass: HomeAssistant, coordinator: Any) -> int:
+    """把已映射实体的状态推给网关（heartbeat 用：维持 online + 状态同步）。"""
+    mapping = await async_mapping(hass)
+    if not mapping:
+        return 0
+    gateway = coordinator.gateway
+    pushed = 0
+    for entity_id, info in mapping.items():
+        sid = info.get("sid")
+        if not sid:
+            continue
+        state = hass.states.get(entity_id)
+        if state is None:
+            continue
+        spk = info.get("spk") or ""
+        status = []
+        for attr in bridge.SPK_PROFILES.get(spk, {}).get("attrs", []):
+            key = attr["key"]
+            raw = None
+            if key == "on_off":
+                raw = state.state
+            elif key in ("brightness", "cct", "rgb", "rgbw"):
+                raw = state.attributes.get(key)
+            elif key == "percent":
+                raw = state.attributes.get("current_position")
+            elif key in ("temperature", "humidity", "illuminance", "co2", "pm25",
+                         "people_status", "door_status"):
+                raw = state.state
+            if raw is None:
+                continue
+            value = bridge.to_hdl_value(spk, key, raw)
+            if value is not None:
+                status.append({"key": key, "value": value})
+        if status and await async_report_up(gateway, sid, status):
+            pushed += 1
+    return pushed
+
+
+async def async_read_online(gateway: Any, sid: str) -> dict[str, Any]:
+    """回读单个功能点的 online/status，用于确认上报是否生效。"""
+    try:
+        resp = await gateway.client.async_request(
+            TOPIC_FUNCTION_ATTR.format(gw=gateway.oid), {"objects": [{"sid": sid}]}, timeout=8
+        )
+    except LinkError:
+        return {}
+    objs = _objs(resp)
+    return objs[0] if objs else {}
+
+
 async def _async_save_mapping(hass: HomeAssistant, plan: list[dict[str, Any]]) -> None:
-    """把 entity_id -> (oid, sid) 落盘，供后续核对与删除。"""
+    """把 entity_id -> (oid, sid) 落盘，供后续核对、状态同步与删除。"""
     try:
         from homeassistant.helpers.storage import Store
 

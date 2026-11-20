@@ -37,6 +37,8 @@ TOPIC_SCENE_LIST: Final = "/user/{gw}/custom/scene/list/get"
 TOPIC_SCENE_EXECUTE: Final = "/user/{gw}/custom/scene/execute"
 TOPIC_PROPERTY_READ: Final = "/base/{gw}/thing/property/read"
 TOPIC_PROPERTY_DOWN: Final = "/base/{gw}/thing/property/down"
+# 上行属性上报：网关只认这条主题判定功能点在线（实测：上报后 online=true、status 有值）
+TOPIC_PROPERTY_UP: Final = "/base/{gw}/thing/property/up"
 
 # ------------------------------------------------------- 设备/功能 增删改（写入网关）
 # 对应 HDL《LINK主网关协议<->调试软件》：先开编辑开关，再增删改物理模型与功能点
