@@ -29,6 +29,7 @@ from .http_api import VIEWS
 from .protocol import LinkError
 from .provision import async_provision, async_sync_states
 from .scan import async_scan
+from .state_push import async_setup_state_push, async_unload_state_push
 
 LOGGER = logging.getLogger(__name__)
 
@@ -47,7 +48,7 @@ PANEL_URL_PATH = "hdl-device-sync"
 PANEL_COMPONENT = "hdl-link-provision"
 STATIC_URL = "/hdl_link_static"
 PANEL_JS = Path(__file__).parent / "frontend"
-PANEL_VERSION = "2.7.0"
+PANEL_VERSION = "2.8.0"
 
 SERVICE_SCAN = "scan"
 SERVICE_PROVISION = "provision"
@@ -99,30 +100,36 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await _async_setup_provision(hass)
 
+    # HA 状态变更 → 实时上报 HDL（只推网关里真实存在的 sid）
+    try:
+        pusher = await async_setup_state_push(hass, coordinator)
+        hass.data.setdefault(f"{DOMAIN}_pushers", {})[entry.entry_id] = pusher
+    except Exception as err:  # noqa: BLE001 - 状态同步失败不影响实体
+        pusher = None
+        LOGGER.warning("启动状态同步失败: %s", err)
+
     async def _heartbeat_loop() -> None:
-        """心跳 + 保活上报：没有这条循环，写进网关的 HA 功能点会掉成 offline。"""
+        """心跳 + 兜底保活：状态变更已经实时上报，这里只保证 online 不掉。"""
         while True:
             await asyncio.sleep(HEARTBEAT_INTERVAL)
             await coordinator.gateway.async_heartbeat()
             try:
-                pushed = await async_sync_states(hass, coordinator)
-                LOGGER.debug("保活上报 %d 个功能点", pushed)
+                if pusher is not None:
+                    await pusher.async_push_all()
+                else:
+                    await async_sync_states(hass, coordinator)
             except Exception as err:  # noqa: BLE001 - 保活失败不能中断循环
                 LOGGER.warning("保活上报失败: %s", err)
 
     entry.async_create_background_task(hass, _heartbeat_loop(), f"{DOMAIN}-heartbeat")
-
-    # 启动时立刻推一次，别等第一个 30 秒周期
-    try:
-        await async_sync_states(hass, coordinator)
-    except Exception as err:  # noqa: BLE001
-        LOGGER.debug("启动时上报失败: %s", err)
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """卸载：停平台、关连接。"""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    pusher = (hass.data.get(f"{DOMAIN}_pushers") or {}).pop(entry.entry_id, None)
+    async_unload_state_push(pusher)
     coordinator: HdlCoordinator | None = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
     if coordinator is not None:
         await coordinator.async_close()

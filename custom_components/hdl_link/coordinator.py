@@ -64,6 +64,8 @@ class HdlCoordinator(DataUpdateCoordinator[dict[str, dict[str, str]]]):
         self.display_names: dict[str, str] = self._build_display_names()
         # oid -> 物理模块信息
         self.devices: dict[str, dict[str, Any]] = {}
+        # 网关里真实存在的功能点 sid（用来判断"这个 sid 是否还在网关里"）
+        self.function_sids: set[str] = set()
 
     @staticmethod
     def _channel_of(sid: str) -> int | None:
@@ -109,6 +111,14 @@ class HdlCoordinator(DataUpdateCoordinator[dict[str, dict[str, str]]]):
                     self.devices[oid] = item
         except LinkError as err:
             LOGGER.debug("读取物理模块列表失败（不影响实体）: %s", err)
+
+    async def async_refresh_function_sids(self) -> set[str]:
+        """读网关现有的功能点 sid 集合（判断映射里的 sid 是否还在网关里）。"""
+        try:
+            self.function_sids = {f.sid for f in await self.gateway.async_functions() if f.sid}
+        except LinkError as err:
+            LOGGER.debug("读取功能点列表失败（沿用上次结果）: %s", err)
+        return self.function_sids
 
     async def async_close(self) -> None:
         await self.gateway.async_close()
@@ -160,6 +170,8 @@ class HdlCoordinator(DataUpdateCoordinator[dict[str, dict[str, str]]]):
                 "raw": item,
             }
             LOGGER.debug("HDL 上行: %s", payload)
+            if kind == "down":
+                LOGGER.info("收到网关下行控制 sid=%s status=%s", sid, item.get("status"))
             if hass is not None:
                 hass.bus.async_fire(f"{DOMAIN}_hdl_event", payload)
         if hass is None:

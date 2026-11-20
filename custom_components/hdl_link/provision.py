@@ -76,34 +76,7 @@ async def _pull_state(hass: HomeAssistant, coordinator: Any, entity_id: str) -> 
     spk = state.attributes.get("hdl_spk") or ""
     if not spk:
         return []
-    status: list[dict[str, Any]] = []
-    for attr in bridge.SPK_PROFILES.get(spk, {}).get("attrs", []):
-        key = attr["key"]
-        raw: Any = None
-        if key == "on_off":
-            raw = state.state
-        elif key in ("brightness", "cct", "rgb", "rgbw"):
-            raw = state.attributes.get(key) or state.attributes.get("brightness")
-        elif key == "percent":
-            raw = state.attributes.get("current_position")
-        elif key in ("temperature", "humidity", "illuminance", "co2", "pm25"):
-            raw = state.state
-        elif key == "people_status":
-            raw = state.state
-        elif key == "door_status":
-            raw = state.state
-        elif key == "room_temp":
-            raw = state.attributes.get("current_temperature")
-        elif key == "set_temp":
-            raw = state.attributes.get("temperature")
-        elif key in ("mode", "fan"):
-            raw = state.state if key == "mode" else state.attributes.get("fan_mode")
-        if raw is None:
-            continue
-        value = bridge.to_hdl_value(spk, key, raw)
-        if value is not None:
-            status.append({"key": key, "value": value})
-    return status
+    return bridge.status_from_state(spk, state.state, dict(state.attributes))
 
 
 async def async_report_up(gateway: Any, sid: str, status: list[dict[str, Any]]) -> bool:

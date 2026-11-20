@@ -385,6 +385,49 @@ def up_body(sid: str, status: list[dict[str, Any]]) -> dict[str, Any]:
 _BOOL_STR = {True: "on", False: "off"}
 
 
+def status_from_state(spk: str, state_value: str, attributes: dict[str, Any]) -> list[dict[str, str]]:
+    """HA 实体状态 → HDL status 数组（只取该 spk 定义的属性键）。"""
+    out: list[dict[str, str]] = []
+    for attr in SPK_PROFILES.get(spk, {}).get("attrs", []):
+        key = str(attr["key"])
+        raw: Any = None
+        if key == "on_off":
+            raw = state_value
+        elif key in ("brightness",):
+            raw = attributes.get("brightness")
+        elif key in ("cct", "color_temp"):
+            raw = attributes.get("color_temp_kelvin") or attributes.get("color_temp")
+        elif key in ("rgb", "rgbw"):
+            rgb = attributes.get("rgb_color")
+            if isinstance(rgb, (list, tuple)) and len(rgb) == 3:
+                raw = ",".join(str(int(c)) for c in rgb)
+        elif key in ("percent", "position"):
+            raw = attributes.get("current_position")
+        elif key == "temperature":
+            raw = state_value
+        elif key in ("humidity", "illuminance", "co2", "pm25", "tvoc",
+                     "people_status", "door_status", "smoke_status", "gas_status",
+                     "water_status", "help_status", "contact_status"):
+            raw = state_value
+        elif key == "room_temp":
+            raw = attributes.get("current_temperature")
+        elif key == "set_temp":
+            raw = attributes.get("temperature")
+        elif key == "mode":
+            raw = state_value
+        elif key == "fan":
+            raw = attributes.get("fan_mode")
+        elif key == "enable":
+            raw = True
+        if raw is None:
+            continue
+        value = to_hdl_value(spk, key, raw)
+        if value is None:
+            continue
+        out.append({"key": key, "value": value})
+    return out
+
+
 def to_hdl_value(spk: str, key: str, value: Any) -> str | None:
     """HA 状态值 → HDL 属性值（字符串口径，网关 status 里就是字符串）。"""
     if value is None or value in ("unknown", "unavailable"):
