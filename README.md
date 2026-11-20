@@ -260,6 +260,19 @@ curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/js
 2. 面板按下，网关广播 `scene/status/up`，集成收到后按绑定表执行 HA 服务；
 3. 绑定必须用 `mode=action`（事件没有属性 status 可翻译），例如：
 
+在 HA 的「开发者工具 → 动作 → YAML 模式」里直接调服务（不需要 token）：
+
+```yaml
+action: hdl_link.bind
+data:
+  sid: "0201036AFD43B20A0A0100011100"
+  entity_id: light.ha_lamp
+  mode: action
+  action: toggle
+```
+
+也可以用 HTTP 接口（需要长期访问令牌）：
+
 ```bash
 curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
   -d '{"sid":"0201036AFD43B20A0A0100011100","entity_id":"light.ha_lamp","mode":"action","action":"toggle"}' \
