@@ -922,13 +922,27 @@ class HdlLinkProvision extends HTMLElement {
 
     const bq = root.querySelector("#bq");
     if (bq) {
+      // 输入时先只记值，150ms 后才重绘：直接同步重绘会把连续输入的字符吞掉
       bq.addEventListener("input", (e) => {
         this._bridgeQuery = e.target.value;
-        this._render();
-        const box = this.shadowRoot.querySelector("#bq");
-        if (box) {
-          box.focus();
-          box.setSelectionRange(box.value.length, box.value.length);
+        if (this._bridgeTimer) clearTimeout(this._bridgeTimer);
+        this._bridgeTimer = setTimeout(() => {
+          this._bridgeTimer = null;
+          this._render();
+          const box = this.shadowRoot.querySelector("#bq");
+          if (box) {
+            box.focus();
+            box.setSelectionRange(box.value.length, box.value.length);
+          }
+        }, 150);
+      });
+      bq.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          if (this._bridgeTimer) {
+            clearTimeout(this._bridgeTimer);
+            this._bridgeTimer = null;
+          }
+          this._render();
         }
       });
     }

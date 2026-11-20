@@ -196,7 +196,8 @@ async def async_handle(
     """处理一批上行 objects：先记录，再按 sid 直连绑定执行。"""
     data = await async_load(hass)
     own = own_sids or set()
-    LOGGER.warning("HDL 上行批次 kind=%s 条数=%d", kind, len(objects))
+    LOGGER.warning("HDL 上行批次 kind=%s 条数=%d sids=%s", kind, len(objects),
+                   [str((o or {}).get("sid") or "")[-12:] for o in objects if isinstance(o, dict)][:8])
     executed: list[dict[str, Any]] = []
     dirty = False
     for obj in objects:
