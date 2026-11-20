@@ -813,6 +813,7 @@ class HdlLinkProvision extends HTMLElement {
         </div>
 
         <div class="overview">
+          <span>集成版本 <b>${escapeHtml((data && data.version) || "—")}</b></span>
           <span>场景 <b>${counts.scenes}</b></span>
           <span>真实功能点 <b>${counts.functions}</b></span>
           <span>已绑定 <b>${counts.bound}</b></span>

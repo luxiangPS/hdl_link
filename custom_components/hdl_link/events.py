@@ -75,6 +75,14 @@ async def async_load(hass: HomeAssistant) -> dict[str, Any]:
     data.setdefault("sids", {})
     data.setdefault("seen", [])
     data.setdefault("state", {})
+    # 旧版本（≤2.8.9）的 seen 只有 sid/kind，没有事件时间与次数，面板会显示「未收到过」。
+    # 这类空壳记录直接丢掉，下一次事件会以新结构重新写入。
+    if isinstance(data.get("seen"), list):
+        data["seen"] = [
+            item
+            for item in data["seen"]
+            if isinstance(item, dict) and item.get("last_at") and item.get("count")
+        ]
     return data
 
 

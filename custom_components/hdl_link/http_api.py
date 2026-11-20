@@ -294,6 +294,9 @@ class HdlBridgeView(HomeAssistantView):
         data = await async_bindings(hass)
         result = join_bridge_rows(scenes, functions, data.get("sids") or {}, data.get("seen") or [])
         result["gateway"] = {"gw_id": coordinator.gw_id, "host": coordinator.gateway.host}
+        from . import PANEL_VERSION
+
+        result["version"] = PANEL_VERSION
         return self.json(result)
 
     async def post(self, request: web.Request) -> web.Response:
