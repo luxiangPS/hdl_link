@@ -48,7 +48,7 @@ PANEL_URL_PATH = "hdl-device-sync"
 PANEL_COMPONENT = "hdl-link-provision"
 STATIC_URL = "/hdl_link_static"
 PANEL_JS = Path(__file__).parent / "frontend"
-PANEL_VERSION = "2.8.2"
+PANEL_VERSION = "2.8.3"
 
 SERVICE_SCAN = "scan"
 SERVICE_PROVISION = "provision"

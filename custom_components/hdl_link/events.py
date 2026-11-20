@@ -159,8 +159,10 @@ async def async_handle(
             continue
 
         rule = data["sids"].get(sid)
-        if rule is None and kind == "down":
-            # 网关下发来的是我们自己注册的功能点 sid：直接用 provision 映射自动执行
+        if rule is None and kind in ("down", "function", "up"):
+            # 网关把面板/App 对 HA 虚拟设备的控制当成属性变更，以 property/up 广播回来
+            #（实测：按一次「虚拟可调灯」就收到一条 up，sids=该虚拟 sid，没有 down）
+            # 这类 sid 直接用 provision 映射自动执行
             from .provision import async_entity_for_sid
 
             auto = await async_entity_for_sid(hass, sid)

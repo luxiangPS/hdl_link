@@ -882,4 +882,8 @@ class HdlLinkProvision extends HTMLElement {
   }
 }
 
-customElements.define("hdl-link-provision", HdlLinkProvision);
+// 面板会被重复加载（切页/刷新），标签名只能注册一次，否则报
+// "hdl-link-provision has already been used with this registry"
+if (!customElements.get("hdl-link-provision")) {
+  customElements.define("hdl-link-provision", HdlLinkProvision);
+}
