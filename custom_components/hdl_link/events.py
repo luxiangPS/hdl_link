@@ -47,6 +47,10 @@ ACTION_SERVICES = {
 TRIGGERS = ("any", "on", "off")
 MODES = ("follow", "action")
 
+# 事件统计的落盘节流：最多每 SAVE_INTERVAL 秒写一次（连按/状态暴雨时不刷爆存储）
+SAVE_INTERVAL = 3
+_last_save_ts = 0.0
+
 
 async def _store(hass: HomeAssistant):
     from homeassistant.helpers.storage import Store
@@ -88,12 +92,7 @@ async def async_load(hass: HomeAssistant) -> dict[str, Any]:
 
 async def async_save(hass: HomeAssistant, data: dict[str, Any]) -> None:
     try:
-        store = await _store(hass)
-        if hasattr(store, "async_delay_save"):
-            # 每秒都可能来事件（灯泡状态、按键连按），合并写盘，避免刷爆存储
-            store.async_delay_save(lambda: data, 8)
-            return
-        await store.async_save(data)
+        await (await _store(hass)).async_save(data)
     except Exception as err:  # noqa: BLE001
         LOGGER.warning("保存功能绑定失败: %s", err)
 
@@ -137,12 +136,22 @@ async def async_set_mapping(
     return {"ok": True, "action": "set", "sid": sid, "mapping": data["sids"][sid]}
 
 
+def _maybe_dirty(now: int) -> bool:
+    """节流：同一秒内的连续事件合并，最多每 SAVE_INTERVAL 秒落一次盘。"""
+    global _last_save_ts
+    if now - _last_save_ts >= SAVE_INTERVAL:
+        _last_save_ts = now
+        return True
+    return False
+
+
 def _remember(data: dict[str, Any], sid: str, values: dict[str, str], kind: str) -> bool:
-    """把收到过的功能点记进 seen（前端下拉挑 sid 用），返回是否有变化。
+    """把收到过的功能点记进 seen（前端下拉挑 sid 用），返回是否需要落盘。
 
     同一条会累计 ``count`` 并更新 ``last_at``（Unix 秒），面板上用来判断
     「面板按键到底有没有把事件送到 HA」——这是场景桥/按键桥现场自检的核心依据。
     """
+    global _last_save_ts
     seen = data["seen"]
     snapshot = ";".join(f"{k}={v}" for k, v in sorted(values.items()))
     now = int(time.time())
@@ -152,7 +161,7 @@ def _remember(data: dict[str, Any], sid: str, values: dict[str, str], kind: str)
             item["kind"] = kind or item.get("kind") or ""
             item["last_at"] = now
             item["count"] = int(item.get("count") or 0) + 1
-            return True
+            return _maybe_dirty(now)
     seen.append(
         {
             "sid": sid,
@@ -167,6 +176,7 @@ def _remember(data: dict[str, Any], sid: str, values: dict[str, str], kind: str)
         # 只保留最近 400 个 sid，防止长期运行把存储撑大（面板只需近期的自检信息）
         seen.sort(key=lambda item: int(item.get("last_at") or 0), reverse=True)
         del seen[400:]
+    _last_save_ts = now
     return True
 
 
