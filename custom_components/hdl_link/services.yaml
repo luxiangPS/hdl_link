@@ -68,8 +68,8 @@ bind:
       selector:
         select:
           options:
-            - action
-            - follow
+            - "action"
+            - "follow"
     action:
       name: 动作
       description: mode=action 时执行的服务，如 toggle / turn_on / turn_off / open / close / run。
@@ -83,6 +83,6 @@ bind:
       selector:
         select:
           options:
-            - any
-            - on
-            - off
+            - "any"
+            - "on"
+            - "off"
