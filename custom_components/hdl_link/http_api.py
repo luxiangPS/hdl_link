@@ -16,6 +16,7 @@ from .driver_bridge import (
     async_drive_down,
     async_edit_function,
     async_push_driver_config,
+    async_remove_device,
 )
 from .provision import async_mapping, async_provision
 from .scan import async_scan
@@ -190,6 +191,57 @@ class HdlDriverEditView(HomeAssistantView):
         return self.json(result, status_code=status)
 
 
+class HdlDriverRemoveDeviceView(HomeAssistantView):
+    """POST /api/hdl_link/driver/remove_device —— 把一台设备整体移除出网关。
+
+    请求体：{"oid": "...", "device_id": "...", "remove_mirror": true}
+    oid 取不到时可只传 device_id（本页同步过的设备会从扫描结果里带出 oid）。
+    返回：{"ok","oid","removed_functions","device_deleted","mirror_removed","warnings"}
+    """
+
+    url = "/api/hdl_link/driver/remove_device"
+    name = "api:hdl_link:driver_remove_device"
+    requires_auth = True
+
+    async def post(self, request: web.Request) -> web.Response:
+        hass: HomeAssistant = request.app["hass"]
+        try:
+            body = await request.json()
+        except ValueError:
+            return self.json_message("请求体必须是 JSON", status_code=400)
+        coordinator = _coordinator(hass, body.get("entry_id"))
+        if coordinator is None:
+            return self.json_message("HDL LINK 尚未配置", status_code=400)
+        oid = body.get("oid") or ""
+        device_id = body.get("device_id") or None
+        if not oid and not device_id:
+            return self.json_message("需要 oid 或 device_id", status_code=400)
+        if not oid and device_id:
+            # 从注册表里反查 oid（identifiers = (DOMAIN, "<gw_id>-<oid>")）
+            from homeassistant.helpers import device_registry as dr
+
+            reg = dr.async_get(hass)
+            dev = reg.async_get(device_id)
+            identifiers = getattr(dev, "identifiers", ()) or () if dev else ()
+            for ident in identifiers:
+                if str(ident[0]).lower() == DOMAIN and "-" in str(ident[1]):
+                    oid = str(ident[1]).split("-", 1)[1]
+                    break
+        try:
+            result = await async_remove_device(
+                hass,
+                coordinator,
+                oid=oid,
+                device_id=device_id,
+                remove_mirror=bool(body.get("remove_mirror", True)),
+            )
+        except Exception as err:  # noqa: BLE001
+            LOGGER.exception("移除设备失败")
+            return self.json({"error": f"{type(err).__name__}: {err}"}, status_code=500)
+        status = 200 if result.get("ok") else 400
+        return self.json(result, status_code=status)
+
+
 class HdlDriverRegisterView(HomeAssistantView):
     """POST /api/hdl_link/driver/register —— 把 sid 以 driver_name 上报网关（验证驱动是否就绪）。"""
 
@@ -351,5 +403,6 @@ VIEWS = (
     HdlDriverDevicesView(),
     HdlDriverDownView(),
     HdlDriverEditView(),
+    HdlDriverRemoveDeviceView(),
     HdlDriverRegisterView(),
 )

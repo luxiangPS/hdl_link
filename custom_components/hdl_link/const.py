@@ -69,13 +69,24 @@ PROVISIONABLE_SPK: Final[tuple[str, ...]] = (
     "curtain.switch",
     "curtain.trietex",
     "curtain.roller",
+    "curtain.shades",
     "sensor.temperature",
     "sensor.humidity",
     "sensor.light",
     "sensor.co2",
     "sensor.pm25",
+    "sensor.tvoc",
     "sensor.pir",
     "sensor.doorwindow",
+    "sensor.smoke",
+    "sensor.gas",
+    "sensor.water",
+    "sensor.help",
+    "sensor.dryContact",
+    "hvac.ac",
+    "hvac.fan",
+    "hvac.airFresh",
+    "hvac.cac",
 )
 
 # 每个 spk 需要的属性定义（写入 function/attribute/add 的 attributes）
@@ -106,13 +117,46 @@ SPK_ATTRIBUTE_SCHEMA: Final[dict[str, list[dict[str, str]]]] = {
     "curtain.switch": [{"key": "on_off", "data_type": "boolean"}],
     "curtain.trietex": [{"key": "position", "data_type": "int", "min": "0", "max": "100"}],
     "curtain.roller": [{"key": "position", "data_type": "int", "min": "0", "max": "100"}],
+    "curtain.shades": [{"key": "position", "data_type": "int", "min": "0", "max": "100"}],
     "sensor.temperature": [{"key": "temperature", "data_type": "float", "min": "-40", "max": "120"}],
     "sensor.humidity": [{"key": "humidity", "data_type": "float", "min": "0", "max": "100"}],
     "sensor.light": [{"key": "illuminance", "data_type": "float", "min": "0", "max": "100000"}],
     "sensor.co2": [{"key": "co2", "data_type": "float", "min": "0", "max": "5000"}],
     "sensor.pm25": [{"key": "pm25", "data_type": "float", "min": "0", "max": "1000"}],
+    "sensor.tvoc": [{"key": "tvoc", "data_type": "float", "min": "0", "max": "5000"}],
     "sensor.pir": [{"key": "people_status", "data_type": "boolean"}],
     "sensor.doorwindow": [{"key": "door_status", "data_type": "boolean"}],
+    "sensor.smoke": [{"key": "smoke_status", "data_type": "string", "value": ["normal", "alarm"]}],
+    "sensor.gas": [{"key": "gas_status", "data_type": "string", "value": ["normal", "alarm"]}],
+    "sensor.water": [{"key": "water_status", "data_type": "string", "value": ["normal", "alarm"]}],
+    "sensor.help": [{"key": "sos_status", "data_type": "string", "value": ["normal", "alarm"]}],
+    "sensor.dryContact": [{"key": "on_off", "data_type": "string", "value": ["on", "off"]}],
+    "hvac.ac": [
+        {"key": "on_off", "data_type": "boolean"},
+        {"key": "mode", "data_type": "string", "value": ["cool", "heat", "fan", "auto", "dry"]},
+        {"key": "fan", "data_type": "string", "value": ["high", "medium", "low", "auto"]},
+        {"key": "set_temp", "data_type": "float", "min": "16", "max": "30"},
+        {"key": "swing", "data_type": "string", "value": ["on", "off"]},
+        {"key": "room_temp", "data_type": "float"},
+    ],
+    "hvac.cac": [
+        {"key": "on_off", "data_type": "boolean"},
+        {"key": "cac_valve", "data_type": "string", "value": ["on", "off"]},
+        {"key": "fh_valve", "data_type": "string", "value": ["on", "off"]},
+        {"key": "set_temp", "data_type": "float", "min": "16", "max": "30"},
+        {"key": "room_temp", "data_type": "float"},
+    ],
+    "hvac.fan": [
+        {"key": "on_off", "data_type": "boolean"},
+        {"key": "fan_speed_percent", "data_type": "int", "min": "1", "max": "8"},
+    ],
+    "hvac.airFresh": [
+        {"key": "on_off", "data_type": "boolean"},
+        {"key": "mode", "data_type": "string", "value": ["auto", "manual", "timer", "smart"]},
+        {"key": "co2", "data_type": "float"},
+        {"key": "pm25", "data_type": "float"},
+        {"key": "humidity", "data_type": "float"},
+    ],
 }
 
 # 扫描时跳过的域（系统/不可控，写进 HDL 没有意义）
@@ -155,6 +199,8 @@ SCAN_DOMAINS: Final[tuple[str, ...]] = (
     "humidifier",
     "lock",
     "vacuum",
+    "valve",
+    "siren",
     "sensor",
     "binary_sensor",
 )
@@ -189,10 +235,15 @@ SPK_PLATFORM: Final[dict[str, tuple[str, str]]] = {
     "sensor.help": ("binary_sensor", "紧急求助"),
     "sensor.dryContact": ("binary_sensor", "干接点"),
     # 窗帘
-    "curtain.shades": ("cover", "百叶帘"),
+    "curtain.shades": ("cover", "卷帘/遮阳"),
     "curtain.roller": ("cover", "卷帘"),
     "curtain.trietex": ("cover", "开合帘"),
     "curtain.switch": ("cover", "开关停窗帘"),
+    # 暖通
+    "hvac.ac": ("climate", "空调"),
+    "hvac.fan": ("fan", "风机"),
+    "hvac.airFresh": ("humidifier", "新风"),
+    "hvac.cac": ("climate", "中央空调"),
 }
 
 # 缺少上表条目时按前缀兜底

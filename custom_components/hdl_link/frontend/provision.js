@@ -36,6 +36,7 @@ const SPK_LABELS = {
   "curtain.switch": "开关停窗帘",
   "curtain.trietex": "开合帘",
   "curtain.roller": "卷帘",
+  "curtain.shades": "卷帘/遮阳",
   "sensor.temperature": "温度",
   "sensor.humidity": "湿度",
   "sensor.light": "照度",
@@ -43,6 +44,16 @@ const SPK_LABELS = {
   "sensor.pm25": "PM2.5",
   "sensor.pir": "人体感应",
   "sensor.doorwindow": "门磁",
+  "sensor.tvoc": "TVOC",
+  "sensor.smoke": "烟雾",
+  "sensor.gas": "燃气",
+  "sensor.water": "水浸",
+  "sensor.help": "紧急求助",
+  "sensor.dryContact": "干接点",
+  "hvac.ac": "空调",
+  "hvac.cac": "中央空调",
+  "hvac.fan": "风机",
+  "hvac.airFresh": "新风",
 };
 
 function escapeHtml(s) {
@@ -589,6 +600,9 @@ class HdlLinkProvision extends HTMLElement {
         .iconbtn { border:none; background:transparent; color:var(--secondary-text-color,#9aa0a6); cursor:pointer;
                    font-size:13px; line-height:1; padding:2px 6px; border-radius:4px; }
         .iconbtn:hover { background:#fdecec; color:#c62828; }
+        .btn.mini.danger { border-color:#f3c1c1; color:#b3261e; background:#fff; padding:3px 9px;
+                           font-size:12px; border-radius:6px; margin-left:6px; }
+        .btn.mini.danger:hover { background:#fdecec; }
         tr.unusable td { opacity:.72; }
         .chip.restore { border-color:#f5d9a8; background:#fffaf0; color:#a45c11; }
         .hidden { display:none; }
@@ -1049,7 +1063,10 @@ class HdlLinkProvision extends HTMLElement {
         ${metaParts ? `<span class="meta">${escapeHtml(metaParts)}</span>` : ""}
         <span class="right">${
           isExisting
-            ? `${fns.length} 个功能 · 只读`
+            ? `${fns.length} 个功能 · 已锁定
+               <button class="btn mini danger" data-remove-device="${escapeHtml(device.device_id)}"
+                 data-oid="${escapeHtml(device.gateway_oid || "")}"
+                 title="从 HDL 网关删除该设备及其功能点，删除后本页恢复为可勾选">移除出网关</button>`
             : `${device.supported_count} 个可写入 · 已选 ${selected}`
         }${collapsed ? " · 已收起" : ""}</span>
       </div>
@@ -1247,6 +1264,48 @@ class HdlLinkProvision extends HTMLElement {
         this._checked.delete(node.dataset.remove);
         this._savePrefs();
         this._render();
+      });
+    });
+
+    // 移除出网关（整台设备：删功能点 + 删设备 + 清映射），成功后重扫恢复可勾选
+    root.querySelectorAll("[data-remove-device]").forEach((btn) => {
+      btn.addEventListener("click", async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const deviceId = btn.dataset.removeDevice;
+        const oid = btn.dataset.oid || "";
+        const device = (this._scan && this._scan.devices ? this._scan.devices : []).find(
+          (d) => d.device_id === deviceId
+        );
+        const name = device ? device.name : deviceId;
+        const count = device ? (device.functions || []).length : 0;
+        if (!window.confirm(`确定把「${name}」从 HDL 网关移除？\n将删除该设备的 ${count} 个功能点，网关里相关场景/面板绑定会失效。`)) {
+          return;
+        }
+        if (this._busy) return;
+        this._busy = true;
+        btn.disabled = true;
+        btn.textContent = "移除中…";
+        try {
+          const res = await this._req("POST", "hdl_link/driver/remove_device", {
+            oid,
+            device_id: deviceId,
+            remove_mirror: true,
+          });
+          const removed = (res && res.removed_functions) || [];
+          const warn = (res && res.warnings) || [];
+          window.alert(
+            `已移除「${name}」\n` +
+              `功能点 ${removed.length} 个` +
+              (res && res.device_deleted ? "，网关设备已删除" : "，网关设备删除未确认（功能点已清空）") +
+              (res && res.mirror_removed ? "，HA 镜像设备已清理" : "") +
+              (warn.length ? `\n\n提示：\n${warn.slice(0, 3).join("\n")}` : "")
+          );
+        } catch (err) {
+          window.alert(`移除失败：${String(err && err.message ? err.message : err)}`);
+        }
+        this._busy = false;
+        await this._load();
       });
     });
 

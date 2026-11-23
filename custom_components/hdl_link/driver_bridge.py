@@ -20,8 +20,10 @@ from homeassistant.core import HomeAssistant
 
 from . import bridge
 from .const import (
+    DOMAIN,
     STORAGE_KEY,
     STORAGE_VERSION,
+    TOPIC_DEVICE_DELETE,
     TOPIC_FUNCTION_ADD,
     TOPIC_FUNCTION_DELETE,
     TOPIC_FUNCTION_EDIT,
@@ -230,6 +232,104 @@ async def _save_mapping(hass: HomeAssistant, mapping: dict[str, Any]) -> None:
         await store.async_save({"mapping": mapping})
     except Exception as err:  # noqa: BLE001
         LOGGER.warning("保存映射失败: %s", err)
+
+
+# ------------------------------------------------------------------ 整设备移除
+async def async_remove_device(
+    hass: HomeAssistant,
+    coordinator: Any,
+    *,
+    oid: str,
+    device_id: str | None = None,
+    remove_mirror: bool = True,
+) -> dict[str, Any]:
+    """把一台设备整体「移除出网关」。
+
+    顺序：先删功能点（sid）→ 再删设备（oid）→ 清映射 → 删 HA 里的镜像设备。
+    任何一步失败都不中断，最后一并报告；只要映射已清，重扫后该设备就会回到可勾选状态。
+    """
+    from .provision import async_mapping
+
+    oid = str(oid or "").upper()
+    gateway = coordinator.gateway
+    gw = gateway.oid
+    mapping = await async_mapping(hass)
+    result: dict[str, Any] = {
+        "ok": True, "oid": oid, "removed_functions": [], "device_deleted": False,
+        "mirror_removed": False, "warnings": [],
+    }
+
+    if not oid:
+        return {"ok": False, "error": "缺少 oid，无法定位网关设备"}
+
+    # 1) 删该 oid 下所有已登记的功能点
+    for entity_id, info in list(mapping.items()):
+        if str(info.get("oid") or "").upper() != oid:
+            continue
+        sid = info.get("sid")
+        if sid:
+            try:
+                resp = await gateway.client.async_request(
+                    TOPIC_FUNCTION_DELETE.format(gw=gw), {"objects": [{"sid": sid}]}, timeout=10
+                )
+                if not _ok(resp):
+                    result["warnings"].append(f"删功能 {sid} 被拒绝: {resp}")
+            except LinkError as err:
+                result["warnings"].append(f"删功能 {sid} 超时: {err}")
+        mapping.pop(entity_id, None)
+        result["removed_functions"].append(entity_id)
+
+    await _save_mapping(hass, mapping)
+
+    # 2) 删设备本体：网关对 device/delete 的入参格式在不同固件上不一致，逐个兼容
+    payloads = [{"objects": [{"oid": oid}]}, {"oids": [oid]}, {"objects": [{"oid": oid, "status": "delete"}]}]
+    for payload in payloads:
+        try:
+            resp = await gateway.client.async_request(
+                TOPIC_DEVICE_DELETE.format(gw=gw), payload, timeout=12
+            )
+            if _ok(resp):
+                result["device_deleted"] = True
+                break
+            result["warnings"].append(f"删设备被拒绝({list(payload)[0]}): {resp}")
+        except LinkError as err:
+            result["warnings"].append(f"删设备超时: {err}")
+
+    # 3) 删 HA 里的镜像设备（否则扫描会一直把它当「已在网关」）
+    if remove_mirror:
+        try:
+            from homeassistant.helpers import device_registry as dr
+
+            reg = dr.async_get(hass)
+            gw_id = getattr(coordinator, "gw_id", None) or ""
+            target = None
+            for dev in reg.devices.values():
+                for ident in dev.identifiers or ():
+                    if ident[0] != DOMAIN:
+                        continue
+                    value = str(ident[1])
+                    if value == f"{gw_id}-{oid}" or value.endswith(f"-{oid}"):
+                        target = dev
+                        break
+                if target:
+                    break
+            if target is None and device_id:
+                target = reg.async_get(device_id)
+            if target is not None:
+                reg.async_remove_device(target.id)
+                result["mirror_removed"] = True
+                try:
+                    coordinator.devices.pop(oid, None)
+                except Exception:  # noqa: BLE001
+                    pass
+        except Exception as err:  # noqa: BLE001
+            result["warnings"].append(f"删镜像设备失败: {type(err).__name__}: {err}")
+
+    if not result["device_deleted"] and result["removed_functions"]:
+        result["ok"] = True  # 功能已清空，网关里不会再有可用点
+    else:
+        result["ok"] = result["device_deleted"] or result["mirror_removed"]
+    return result
 
 
 # ------------------------------------------------------------------ 驱动上报

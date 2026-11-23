@@ -209,6 +209,49 @@ SPK_PROFILES: dict[str, dict[str, Any]] = {
         "platform": "sensor",
         "attrs": [{"key": "pm25", "data_type": "float", "min": "0", "max": "1000", "rw": "r"}],
     },
+    "sensor.tvoc": {
+        "label": "传感器-TVOC",
+        "platform": "sensor",
+        "attrs": [{"key": "tvoc", "data_type": "float", "min": "0", "max": "5000", "rw": "r"}],
+    },
+    "sensor.smoke": {
+        "label": "传感器-烟雾",
+        "platform": "sensor",
+        "attrs": [
+            {"key": "smoke_status", "data_type": "string", "value": ["normal", "alarm"], "rw": "r"},
+            {"key": "enable", "data_type": "boolean", "rw": "rw"},
+            {"key": "battery_percentage", "data_type": "integer", "min": "0", "max": "100", "rw": "r"},
+        ],
+    },
+    "sensor.gas": {
+        "label": "传感器-燃气",
+        "platform": "sensor",
+        "attrs": [
+            {"key": "gas_status", "data_type": "string", "value": ["normal", "alarm"], "rw": "r"},
+            {"key": "enable", "data_type": "boolean", "rw": "rw"},
+        ],
+    },
+    "sensor.water": {
+        "label": "传感器-水浸",
+        "platform": "sensor",
+        "attrs": [
+            {"key": "water_status", "data_type": "string", "value": ["normal", "alarm"], "rw": "r"},
+            {"key": "enable", "data_type": "boolean", "rw": "rw"},
+        ],
+    },
+    "sensor.help": {
+        "label": "传感器-紧急求助",
+        "platform": "sensor",
+        "attrs": [
+            {"key": "sos_status", "data_type": "string", "value": ["normal", "alarm"], "rw": "r"},
+            {"key": "enable", "data_type": "boolean", "rw": "rw"},
+        ],
+    },
+    "sensor.dryContact": {
+        "label": "传感器-干接点",
+        "platform": "sensor",
+        "attrs": [{"key": "on_off", "data_type": "string", "value": ["on", "off"], "rw": "r"}],
+    },
     # ---------------- 暖通
     "hvac.ac": {
         "label": "暖通-空调",
@@ -407,8 +450,23 @@ def status_from_state(spk: str, state_value: str, attributes: dict[str, Any]) ->
             raw = state_value
         elif key in ("humidity", "illuminance", "co2", "pm25", "tvoc",
                      "people_status", "door_status", "smoke_status", "gas_status",
-                     "water_status", "help_status", "contact_status"):
+                     "water_status", "help_status", "sos_status", "contact_status"):
             raw = state_value
+        elif key == "swing":
+            raw = attributes.get("swing_mode") or attributes.get("swing_mode_horizontal")
+        elif key == "fan_speed_percent":
+            pct = attributes.get("percentage")
+            if pct is not None:
+                try:
+                    raw = max(1, min(8, int(round(float(pct) / 100 * 8))))
+                except (TypeError, ValueError):
+                    raw = None
+        elif key == "percentage":
+            raw = attributes.get("percentage")
+        elif key == "angle":
+            raw = attributes.get("current_tilt_position")
+        elif key == "cac_valve" or key == "fh_valve":
+            raw = "on" if state_value not in ("off", "unavailable") else "off"
         elif key == "room_temp":
             raw = attributes.get("current_temperature")
         elif key == "set_temp":
@@ -454,6 +512,11 @@ def to_hdl_value(spk: str, key: str, value: Any) -> str | None:
             return str(int(round(float(value))))
         except (TypeError, ValueError):
             return None
+    if key in ("position", "angle", "percentage", "fan_speed_percent"):
+        try:
+            return str(int(round(float(value))))
+        except (TypeError, ValueError):
+            return None
     if key in ("temperature", "humidity", "illuminance", "co2", "pm25", "room_temp",
                "room_humidity", "set_temp"):
         try:
@@ -464,4 +527,8 @@ def to_hdl_value(spk: str, key: str, value: Any) -> str | None:
         return "detected" if str(value) in ("on", "detected", "True", "true") else "undetected"
     if key == "door_status":
         return "open" if str(value) in ("on", "open", "True", "true") else "close"
+    if key in ("smoke_status", "gas_status", "water_status", "sos_status", "help_status"):
+        return "alarm" if str(value) in ("on", "detected", "alarm", "True", "true") else "normal"
+    if key in ("cac_valve", "fh_valve", "swing"):
+        return "on" if str(value) in ("on", "True", "true", "open") else "off"
     return str(value)

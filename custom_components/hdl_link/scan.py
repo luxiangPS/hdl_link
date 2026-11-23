@@ -32,15 +32,28 @@ LOGGER = logging.getLogger(__name__)
 CONTROL_SPK_OPTIONS: dict[str, list[str]] = {
     "light": ["light.dimming", "light.switch", "light.cct", "light.rgb", "light.rgbw"],
     "switch": ["other.common", "panel.socket"],
-    "cover": ["curtain.trietex", "curtain.switch", "curtain.roller"],
-    "sensor": ["sensor.temperature", "sensor.humidity", "sensor.light", "sensor.co2", "sensor.pm25"],
-    "binary_sensor": ["sensor.pir", "sensor.doorwindow"],
+    "cover": ["curtain.trietex", "curtain.roller", "curtain.switch", "curtain.shades"],
+    "climate": ["hvac.ac", "hvac.cac"],
+    "fan": ["hvac.fan", "light.dimming"],
+    "humidifier": ["hvac.airFresh", "other.common"],
+    "lock": ["other.common"],
+    "valve": ["other.common"],
+    "siren": ["other.common"],
+    "media_player": ["other.common"],
+    "water_heater": ["other.common", "hvac.ac"],
+    "vacuum": ["other.common", "light.switch"],
+    "sensor": [
+        "sensor.temperature", "sensor.humidity", "sensor.light", "sensor.co2",
+        "sensor.pm25", "sensor.tvoc",
+    ],
+    "binary_sensor": [
+        "sensor.pir", "sensor.doorwindow", "sensor.smoke", "sensor.gas",
+        "sensor.water", "sensor.help", "sensor.dryContact",
+    ],
 }
 
-# 目前 HDL 侧没有对应功能类型的域：照实标成「暂不支持」，不硬塞一个错误类型
-UNSUPPORTED_DOMAINS = frozenset(
-    {"climate", "fan", "media_player", "water_heater", "humidifier", "lock", "vacuum", "valve"}
-)
+# 仍未覆盖的域：照实标成「暂不支持」，不硬塞错误类型
+UNSUPPORTED_DOMAINS: frozenset[str] = frozenset({"image_processing"})
 
 # sensor 的 device_class -> spk
 SENSOR_CLASS_SPK: dict[str, str] = {
@@ -49,6 +62,8 @@ SENSOR_CLASS_SPK: dict[str, str] = {
     "illuminance": "sensor.light",
     "carbon_dioxide": "sensor.co2",
     "pm25": "sensor.pm25",
+    "volatile_organic_compounds": "sensor.tvoc",
+    "aqi": "sensor.pm25",
 }
 
 # binary_sensor 的 device_class -> spk
@@ -59,6 +74,24 @@ BINARY_CLASS_SPK: dict[str, str] = {
     "door": "sensor.doorwindow",
     "window": "sensor.doorwindow",
     "opening": "sensor.doorwindow",
+    "garage_door": "sensor.doorwindow",
+    "smoke": "sensor.smoke",
+    "gas": "sensor.gas",
+    "carbon_monoxide": "sensor.gas",
+    "moisture": "sensor.water",
+    "water": "sensor.water",
+    "safety": "sensor.help",
+    "problem": "sensor.help",
+}
+
+# 可控域的直接映射（没有更细能力判断时用）
+_DOMAIN_SPK: dict[str, str] = {
+    "lock": "other.common",
+    "valve": "other.common",
+    "siren": "other.common",
+    "media_player": "other.common",
+    "vacuum": "other.common",
+    "water_heater": "other.common",
 }
 
 
@@ -109,13 +142,42 @@ def suggest_spk(domain: str, device_class: str | None, capability: list[str]) ->
             return "light.dimming"
         return "light.switch"
     if domain == "switch":
-        return "other.common"
+        return "panel.socket" if (device_class or "") == "outlet" else "other.common"
     if domain == "cover":
-        return "curtain.trietex" if "position" in capability else "curtain.switch"
+        if "position" in capability:
+            return "curtain.trietex"
+        return "curtain.switch"
+    if domain == "climate":
+        # 中央空调有阀门属性时用 cac，普通空调可控温度/模式用 ac
+        return "hvac.ac"
+    if domain == "fan":
+        return "hvac.fan" if "percentage" in capability else "other.common"
+    if domain == "humidifier":
+        return "hvac.airFresh"
     if domain == "sensor":
         return SENSOR_CLASS_SPK.get(device_class or "", "")
     if domain == "binary_sensor":
         return BINARY_CLASS_SPK.get(device_class or "", "")
+    return _DOMAIN_SPK.get(domain, "")
+
+
+def _registry_oid(device: Any) -> str:
+    """网关原生设备的 oid：identifiers 形如 (DOMAIN, "<gw_id>-<oid>")。"""
+    for ident in getattr(device, "identifiers", ()) or ():
+        try:
+            if ident[0] == DOMAIN and "-" in str(ident[1]):
+                return str(ident[1]).split("-", 1)[1]
+        except (IndexError, TypeError):
+            continue
+    return ""
+
+
+def _mapping_oid(rows: list[dict[str, Any]], mapping: dict[str, Any]) -> str:
+    """本页同步过的设备：从映射表里取 oid（同一设备的功能共用一个 oid）。"""
+    for row in rows:
+        info = mapping.get(row["entity_id"]) or {}
+        if info.get("oid"):
+            return str(info["oid"])
     return ""
 
 
@@ -177,6 +239,18 @@ def _entity_row(
         capability = _cover_capability(state)
     elif domain == "switch":
         capability = ["on_off"]
+    elif domain == "climate":
+        capability = ["on_off"]
+        if "temperature" in attrs:
+            capability.append("set_temp")
+        if attrs.get("hvac_modes"):
+            capability.append("mode")
+        if attrs.get("fan_modes") or attrs.get("fan_mode"):
+            capability.append("fan")
+    elif domain == "fan":
+        capability = ["on_off"] + (["percentage"] if "percentage" in attrs else [])
+    elif domain in ("lock", "valve", "siren", "media_player", "vacuum", "water_heater"):
+        capability = ["on_off"]
     else:
         capability = ["read"]
 
@@ -213,6 +287,15 @@ async def async_scan(hass: HomeAssistant) -> dict[str, Any]:
     ent_reg = er.async_get(hass)
     area_reg = ar.async_get(hass)
 
+    # 已写入网关的实体（本页面同步过）：以映射表为唯一可信来源，
+    # 这样「移除出网关」之后重新扫描，同一行会自动变回可勾选状态。
+    try:
+        from .provision import async_mapping
+
+        mapping: dict[str, Any] = await async_mapping(hass)
+    except Exception:  # noqa: BLE001
+        mapping = {}
+
     devices: list[dict[str, Any]] = []
     skipped_hdl = 0
     skipped_system = 0
@@ -245,16 +328,26 @@ async def async_scan(hass: HomeAssistant) -> dict[str, Any]:
             pass
 
         is_system = integration_domain in SYSTEM_INTEGRATIONS
+        # 功能级「已同步」：只认映射表，不认设备身份，移除后即可恢复可勾选
+        for row in rows:
+            if row["entity_id"] in mapping:
+                row["existing"] = True
+                row["supported"] = True
+                row["mapped_sid"] = (mapping.get(row["entity_id"]) or {}).get("sid")
         if is_existing:
-            # 已在网关里的设备：功能一律视为「已接入」，前端只读展示
+            # 网关原生设备（本集成从网关拉上来的镜像）：功能一律只读
             for row in rows:
                 row["existing"] = True
                 row["supported"] = True
+                row["mirror"] = True
             skipped_hdl += 1
+        any_existing = any(row.get("existing") for row in rows)
+        # 本页写入过网关的设备：整卡按「已同步」处理（打勾锁定，可移除）
+        device_existing = bool(is_existing) or any_existing
         supported_count = sum(1 for r in rows if r["supported"])
 
         # 系统集成且一个可写功能都没有的设备，直接不进列表（例如 Sun / Backup）
-        if is_system and supported_count == 0 and not is_existing:
+        if is_system and supported_count == 0 and not device_existing:
             skipped_system += 1
             continue
 
@@ -278,7 +371,11 @@ async def async_scan(hass: HomeAssistant) -> dict[str, Any]:
                 "integration": integration,
                 "integration_domain": integration_domain,
                 "is_system": is_system,
-                "existing": is_existing,
+                "existing": device_existing,
+                "mirror": bool(is_existing),
+                "gateway_oid": (
+                    _registry_oid(device) if is_existing else _mapping_oid(rows, mapping)
+                ),
                 "functions": rows,
                 "function_count": len(rows),
                 "supported_count": supported_count,

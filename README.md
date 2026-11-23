@@ -29,10 +29,23 @@ HDL（河东科技）官方推出的 Home Assistant 集成：把 HDL 主网关�
 | CO₂ / PM2.5 / TVOC | `sensor` | ppm / µg/m³ |
 | 人体感应 | `binary_sensor` | 有人 / 无人 |
 | 门磁 / 烟雾 / 燃气 / 水浸 / 紧急求助 / 干接点 | `binary_sensor` | 报警 / 正常 |
-| 百叶帘 / 卷帘 / 开合帘 / 开关停窗帘 | `cover` | 开 / 关 / 停 / 位置百分比 |
+| 百叶帘 / 卷帘 / 开合帘 / 开关停窗帘 | `cover` | 开 / 关 / 停 / 位置百分比（百叶另支持角度） |
+| 空调 / 中央空调 | `climate` | 开关 / 模式 / 风速 / 设定温度 / 室温 |
+| 风机 | `fan` | 开关 + 档位（1–8 档 ↔ 百分比） |
+| 新风 / 加湿 | `humidifier` | 开关 + 模式，回传 CO₂ / PM2.5 / 湿度 |
+| 门锁 | `lock` | HDL `on` = 上锁，`off` = 开锁 |
+| 阀门 | `valve` | 开阀 / 关阀 |
+| 扫地机 | `vacuum` | 启动 / 回充 |
+| 媒体播放器 / 热水器 / 警号 | `media_player` / `water_heater` / `siren` | 开关（映射为通用开关点） |
 | 网关场景 | `button` | 每场景一个按钮，按下即执行 |
 
 > 只接入网关工程里实际存在的功能；某类设备在工程里没有，列表里就不会出现。
+> 类型映射表：`const.py` 的 `SPK_PLATFORM` / `SPK_ATTRIBUTE_SCHEMA`，功能点属性由 `bridge.py` 的 `SPK_PROFILES` 定义。
+
+### 设备同步页的两个动作
+
+- **已同步设备打勾锁定**：已经写入网关的设备/功能在列表里显示为勾选且不可修改，避免误改导致 sid 与网关切不一致。是否「已同步」以 `hdl_link.provision` 映射表为准，不靠设备身份猜。
+- **移除出网关**：每台已同步设备的卡片右侧有「移除出网关」按钮。点按并确认后，会依次删除该设备的全部功能点 → 删除设备本体 → 清空映射 → 清理 HA 里的镜像设备；重新扫描后同一行自动回到可勾选、可重新写入的状态。
 
 ---
 
@@ -197,6 +210,7 @@ action:
 | `GET /api/hdl_link/driver/devices` | 全量 HA 设备清单：实体、域、spk、当前状态、oid/sid、是否已注册 |
 | `POST /api/hdl_link/driver/down` | 驱动把网关下行转给 HA 执行：`{"objects":[{"sid","status":[{key,value}]}]}` |
 | `POST /api/hdl_link/driver/edit` | 编辑已注册功能：`{"entity_id","action":"rename|set_spk|delete","name"/"spk"}` |
+| `POST /api/hdl_link/driver/remove_device` | 整台设备移除出网关：`{"oid"/"device_id"}` → 删功能点、删设备、清映射、清镜像设备 |
 | `POST /api/hdl_link/driver/register` | 把 sid 以 `driver_name` 上报网关（验证驱动是否就绪） |
 
 现成的驱动代理脚本：`tools/hdl_ha_driver.py`（仅标准库，跑在局域网任意机器）

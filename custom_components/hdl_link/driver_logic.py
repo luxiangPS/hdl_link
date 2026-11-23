@@ -75,8 +75,15 @@ def service_calls(info: dict[str, Any], status: list[dict[str, Any]]) -> list[di
                 add("cover.open_cover")
             elif on_off == "off":
                 add("cover.close_cover")
-        elif spk.startswith("hvac") or domain == "climate":
+        elif domain == "climate":
             add("climate.turn_on" if on_off == "on" else "climate.turn_off")
+        elif domain == "lock":
+            # HDL 的 on 表示「已锁」，off 表示「开锁」
+            add("lock.lock" if on_off == "on" else "lock.unlock")
+        elif domain == "valve":
+            add("valve.open_valve" if on_off == "on" else "valve.close_valve")
+        elif domain == "vacuum":
+            add("vacuum.start" if on_off == "on" else "vacuum.return_to_base")
         elif on_off == "on":
             add(f"{domain}.turn_on")
         elif on_off == "off":
@@ -126,5 +133,36 @@ def service_calls(info: dict[str, Any], status: list[dict[str, Any]]) -> list[di
 
     if "fan" in values and domain == "climate":
         add("climate.set_fan_mode", fan_mode=values["fan"])
+
+    # 摆动（swing）：HA 的 swing_mode 取值各家不同，不在这里猜，避免下发非法参数
+
+    # 暖通-风机：HDL 1–8 档 → HA 百分比
+    if "fan_speed_percent" in values and domain in ("fan", "climate"):
+        try:
+            step = int(float(values["fan_speed_percent"]))
+        except ValueError:
+            step = 0
+        if step > 0:
+            pct = max(1, min(100, round(step / 8 * 100)))
+            if domain == "fan":
+                add("fan.turn_on", percentage=pct)
+            else:
+                add("climate.turn_on")
+
+    if "percentage" in values and domain == "fan":
+        try:
+            pct = max(0, min(100, int(float(values["percentage"]))))
+        except ValueError:
+            pct = None
+        if pct is not None:
+            add("fan.turn_on", percentage=pct)
+
+    if "angle" in values and domain == "cover":
+        try:
+            tilt = max(0, min(100, int(float(values["angle"]))))
+        except ValueError:
+            tilt = None
+        if tilt is not None:
+            add("cover.set_cover_tilt_position", tilt_position=tilt)
 
     return calls
