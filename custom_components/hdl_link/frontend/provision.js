@@ -1065,7 +1065,7 @@ class HdlLinkProvision extends HTMLElement {
           isExisting
             ? `${fns.length} 个功能 · 已锁定
                <button class="btn mini danger" data-remove-device="${escapeHtml(device.device_id)}"
-                 data-oid="${escapeHtml(device.gateway_oid || "")}"
+                 data-oid="${escapeHtml(device.gateway_oid || "")}" data-mirror="${device.mirror ? 1 : 0}"
                  title="从 HDL 网关删除该设备及其功能点，删除后本页恢复为可勾选">移除出网关</button>`
             : `${device.supported_count} 个可写入 · 已选 ${selected}`
         }${collapsed ? " · 已收起" : ""}</span>
@@ -1279,7 +1279,11 @@ class HdlLinkProvision extends HTMLElement {
         );
         const name = device ? device.name : deviceId;
         const count = device ? (device.functions || []).length : 0;
-        if (!window.confirm(`确定把「${name}」从 HDL 网关移除？\n将删除该设备的 ${count} 个功能点，网关里相关场景/面板绑定会失效。`)) {
+        const isMirror = btn.dataset.mirror === "1" || !!(device && device.mirror);
+        const tip = isMirror
+          ? `注意：这是网关原生设备（本集成从网关拉上来的镜像）。\n删除会连网关工程里这台设备和它的 ${count} 个功能点一起消失，\nHDL App / 面板里引用它的场景会失效。`
+          : `将删除该设备在网关里的 ${count} 个功能点，网关里相关场景 / 面板绑定会失效。`;
+        if (!window.confirm(`确定把「${name}」从 HDL 网关移除？\n\n${tip}`)) {
           return;
         }
         if (this._busy) return;
