@@ -25,6 +25,7 @@ from homeassistant.helpers import device_registry as dr
 
 from .const import CONF_GW_ID, DOMAIN, MANUFACTURER
 from .coordinator import HdlCoordinator
+from .driver_ota import async_ensure_ha_driver
 from .http_api import VIEWS
 from .protocol import LinkError
 from .provision import async_provision, async_sync_states
@@ -48,7 +49,7 @@ PANEL_URL_PATH = "hdl-device-sync"
 PANEL_COMPONENT = "hdl-link-provision"
 STATIC_URL = "/hdl_link_static"
 PANEL_JS = Path(__file__).parent / "frontend"
-PANEL_VERSION = "2.9.0"
+PANEL_VERSION = "2.9.1"
 
 SERVICE_SCAN = "scan"
 SERVICE_PROVISION = "provision"
@@ -96,6 +97,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await coordinator.async_config_entry_first_refresh()
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+
+    # 装上集成顺手兜底驱动：网关侧没有 HA 驱动就用本地包自动装（零凭据、不走云端）
+    try:
+        driver_state = await async_ensure_ha_driver(
+            coordinator.gateway.host,
+            coordinator.gw_id,
+            token=str(entry.options.get("ha_token") or entry.data.get("ha_token") or ""),
+            base_url=str(hass.config.internal_url or ""),
+        )
+        hass.data.setdefault(f"{DOMAIN}_driver", {})[entry.entry_id] = driver_state
+    except Exception as err:  # noqa: BLE001 - 驱动保障失败不能影响集成加载
+        LOGGER.warning("HA 驱动检测/自动安装跳过: %s", err)
 
     # 网关自身作为一个 HA 设备（其余实体通过 via_device 挂到它下面）
     device_registry = dr.async_get(hass)
@@ -294,6 +307,7 @@ async def _async_setup_provision(hass: HomeAssistant) -> None:
 
 
 __all__ = ["async_setup_entry", "async_unload_entry", "CONF_GW_ID"]
+
 
 
 
