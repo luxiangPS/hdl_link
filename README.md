@@ -1,352 +1,143 @@
 # HDL LINK for Home Assistant（HDL 官方版）
 
-HDL（河东科技）官方推出的 Home Assistant 集成：把 HDL 主网关下的照明、开关、传感器、
-窗帘与场景接入 Home Assistant，与 HA 自动化、面板、语音助手一起使用。
+把 HDL 主网关下的照明、开关、传感器、窗帘与场景接入 Home Assistant。
 
-- **零配置门槛**：向导内自动搜索局域网内的 HDL 网关，选中即接入，无需填写总线地址
-- **能力来自网关自身**：列出的是网关工程里真实存在的功能与场景，按名称/类型勾选即可
-- **纯本地运行**：不依赖云端、不依赖 MQTT、不修改网关与设备固件
-- **官方维护**：由 HDL 广州技术团队维护，随 HA 版本更新
-
-支持安装方式：
-
-- Home Assistant「Marketplace」（或 HACS「自定义存储库」）从本仓库安装
-- 手动把 `custom_components/hdl_link` 拷入 HA 的 `config/custom_components/`
+**纯本地协议对接，不在网关侧安装任何驱动、不依赖云端。** 集成作为「本地三方应用」直接连网关 TCP 8586，
+按 HDL 开放平台《本地协议对接》文档收发 JSON 主题帧：读功能点 / 属性 / 场景 / 房间，下发控制，周期读回状态。
+网关重启、HA 重启都不需要往网关里塞脚本。
 
 ---
 
-## 1. 支持的设备类型
+## 1. 原理
 
-| 设备类型 | HA 平台 | 说明 |
-|---|---|---|
-| 开关灯 | `light` | 开 / 关 |
-| 调光灯 | `light` | 开 / 关 + 亮度（0–100%） |
-| 色温灯 / RGB / RGBW 灯 | `light` | 当前按可调光接入（色温与颜色控制见「已知边界」） |
-| 插座 / 通用继电器触点 | `switch` | 开 / 关 |
-| 温度 | `sensor` | ℃ |
-| 湿度 | `sensor` | %RH（网关配置了湿度传感器时出现） |
-| 照度 | `sensor` | lx |
-| CO₂ / PM2.5 / TVOC | `sensor` | ppm / µg/m³ |
-| 人体感应 | `binary_sensor` | 有人 / 无人 |
-| 门磁 / 烟雾 / 燃气 / 水浸 / 紧急求助 / 干接点 | `binary_sensor` | 报警 / 正常 |
-| 百叶帘 / 卷帘 / 开合帘 / 开关停窗帘 | `cover` | 开 / 关 / 停 / 位置百分比（百叶另支持角度） |
-| 空调 / 中央空调 | `climate` | 开关 / 模式 / 风速 / 设定温度 / 室温 |
-| 风机 | `fan` | 开关 + 档位（1–8 档 ↔ 百分比） |
-| 新风 / 加湿 | `humidifier` | 开关 + 模式，回传 CO₂ / PM2.5 / 湿度 |
-| 门锁 | `lock` | HDL `on` = 上锁，`off` = 开锁 |
-| 阀门 | `valve` | 开阀 / 关阀 |
-| 扫地机 | `vacuum` | 启动 / 回充 |
-| 媒体播放器 / 热水器 / 警号 | `media_player` / `water_heater` / `siren` | 开关（映射为通用开关点） |
-| 网关场景 | `button` | 每场景一个按钮，按下即执行 |
+```
+HA（本集成）  ──TCP 8586──▶  HDL 网关  ──Buspro / KNX / LINK──▶  模块与面板
+     ▲                                                              │
+     └────────── 周期 property/read（+ 可选主动上报） ◀──────────────┘
+```
 
-> 只接入网关工程里实际存在的功能；某类设备在工程里没有，列表里就不会出现。
-> 类型映射表：`const.py` 的 `SPK_PLATFORM` / `SPK_ATTRIBUTE_SCHEMA`，功能点属性由 `bridge.py` 的 `SPK_PROFILES` 定义。
+- 发现：UDP 8585（组播 `239.0.168.188` + 广播）发 `/user/all/custom/gateway/search`，网关回 `search_reply`，
+  其中 `oid` 就是本集成所有主题里的 `${gw}`
+  > `oid`（如 `010105003DF6F100`）与 `gatewayId`（云 ID，如 `2109…`）不是一个东西，本地主题用的是 **oid**
 
-### 设备同步页的两个动作
+- 读工程：`/user/{oid}/custom/function/list/get`、`function/attribute/get`、`scene/list/get`、`room/list/get`
+- 控制：`/base/{oid}/thing/property/down`
+- 状态：`/base/{oid}/thing/property/read` 周期读（默认 5 秒，可配）
 
-- **已同步设备打勾锁定**：已经写入网关的设备/功能在列表里显示为勾选且不可修改，避免误改导致 sid 与网关切不一致。是否「已同步」以 `hdl_link.provision` 映射表为准，不靠设备身份猜。
-- **移除出网关**：每台已同步设备的卡片右侧有「移除出网关」按钮。点按并确认后，会依次删除该设备的全部功能点 → 删除设备本体 → 清空映射 → 清理 HA 里的镜像设备；重新扫描后同一行自动回到可勾选、可重新写入的状态。
+实测（MGWIP.430 / V03.11.19）：66 个功能点、场景列表、房间树全部可读，单次读往返 5~19 ms，控制回执 `code=0 / tag=Success`。
 
 ---
 
 ## 2. 安装
 
-### 方式 A：Marketplace / HACS（推荐，可在线更新）
+1. HACS → 自定义存储库 `luxiangPS/hdl_link` 下载，或把 `custom_components/hdl_link` 整目录拷到 HA 的 `config/custom_components/`
+2. 重启 Home Assistant
+3. 设置 → 设备与服务 → 添加集成 → 搜索 **HDL LINK**
 
-1. 打开 **设置 → 加载项与市场（Marketplace）**，搜索并添加 `https://github.com/luxiangPS/hdl_link`（HACS 则在「集成 → 自定义存储库」中添加同一地址）。
-2. 在市场中找到 **HDL LINK** → 安装 → 重启 Home Assistant。
-3. **设置 → 设备与服务 → 添加集成 → 搜索 HDL LINK**。
-
-### 方式 B：手动拷贝
-
-```bash
-cp -r custom_components/hdl_link /config/custom_components/
-ha core restart
-```
+无第三方 Python 依赖；`cryptography`（HA 自带）仅在填写「本地加密密钥」时用于解上报帧。
 
 ---
 
-## 3. 配置向导
+## 3. 配置流程
 
-1. **选择 HDL 网关**
-   向导会自动在局域网内搜索 HDL 网关，下拉列表显示形如 `MGWIP.430 · 192.168.1.150` 的条目，
-   选中后点「提交」。若网络环境屏蔽了广播或跨网段，选「手动输入网关 IP」并填写网关地址。
-2. **选择要接入的功能**
-   列表来自网关工程，每项形如 `[照明] 走廊筒灯（开关灯）`。默认全选可接入项；
-   页面上会显示「共 N 个功能，M 个可接入，K 个类型暂不支持」。
-3. **本地加密密钥（可选）**
-   网关若启用了本地加密上报，填写部署方提供的 16 位本地密钥即可获得实时状态推送；
-   **留空也完全可用**，此时改为按兜底间隔读取状态（见下一节）。
-4. **选择场景（可跳过）**
-   勾选后每个场景生成一个按钮实体，点一下即在网关内执行。
-
-完成后会生成：1 个网关设备 + 若干物理模块设备 + 各功能实体（开关、传感器、场景按钮等）。
-
----
-
-## 4. 日常使用与设置
-
-- **设备页**：设置 → 设备与服务 → HDL LINK → 设备，可见网关与下属物理模块（型号、固件版本取自网关）。
-- **实体页**：按「照明 / 开关 / 数值传感器 / 二元传感器 / 窗帘 / 场景」分组。
-- **状态实时更新**：网关在设备状态变化时主动上报，界面随即刷新，**默认不做周期轮询**（实例启动时读取一次全量状态作为初值）。
-- **兜底轮询（可选）**：集成卡片 → 配置（选项）→ 兜底轮询间隔（秒）；填 `0` 关闭（默认）。也可在同一页更新本地加密密钥。
-
----
-
-## 5. 现场自检脚本（可选，不需要 Home Assistant）
-
-在任意装有 Python 3.9+ 的电脑上（与网关网络可达）：
-
-```bash
-python tools/live_check.py 192.168.1.150
-```
-
-脚本按顺序检查：连接网关 → 读取功能清单 → 读取场景 → 批量读取状态 → 选一路灯下发并回读、再恢复原状态。
-输出会逐项打印 `OK` / `FAIL`，便于现场判断是网络、权限还是工程配置问题。
-
----
-
-## 6. 系统要求
-
-- HDL 主网关（LINK 网关，如 MGWIP 系列），固件支持本地接入
-- 网关与 Home Assistant 网络可达（同网段最稳；跨网段需保证路由与端口放通）
-- Home Assistant 2024.6.0 或更高
-
----
-
-## 7. 已知边界
-
-- 色温与颜色控制尚未开放（不同固件下键名不一致，避免做出宣称但不可用的能力）。
-- 窗帘位置百分比按项目实测键名自适应，个别型号需现场核对。
-- 湿度实体仅在网关工程里存在湿度传感器时出现。
-- 房间信息可读取，但暂未用于自动分区。
-
----
-
-## 8. 排障
-
-| 现象 | 处理 |
+| 步骤 | 内容 |
 |---|---|
-| 向导第 1 步列表为空 / 「发现 0 台」 | 网关与 HA 不同网段或广播被屏蔽：改用「手动输入网关 IP」；确认 HA 与网关路由互通 |
-| 提交时报「无法连接该网关」 | 检查 IP 是否正确、网关是否在线、防火墙是否放通集成的通信端口 |
-| 功能列表为空 | 网关工程里没有配置设备功能，先用调试软件确认工程已下发 |
-| 实体显示「不可用」 | 网关离线或网络中断；恢复后集成会自动重连并刷新 |
-| 操作后状态更新慢 | 先确认已填写本地密钥（实时上报需要它）；仍不刷新时在选项里设置兜底轮询间隔（如 60 秒）
+| 1 | 自动搜索网关（UDP 8585），也可手填 IP |
+| 2 | 连接并读网关信息（型号 / oid / MAC） |
+| 3 | 勾选要接入的功能点（按 spk 自动判定平台） |
+| 4 | 可选：本地加密密钥（16 位）。填了才能解网关的加密主动上报；不填就纯轮询 |
+| 5 | 选场景 → 生成按钮实体 |
+
+选项里可改「轮询间隔」：`0` = 关闭轮询（只靠主动上报），默认 `5` 秒。
 
 ---
 
-## 9. 目录
+## 4. 支持的设备类型
 
-```
-custom_components/hdl_link/
-  __init__.py      集成入口（连接、平台加载、保活）
-  protocol.py      通信层（帧编解码、长连接、重连）
-  gateway.py       网关操作集合（发现、读工程、读写属性、执行场景）
-  discovery.py     网关本地搜索（局域网广播）
-  coordinator.py   状态协调器（上报驱动，兜底轮询可选）
-  config_flow.py   配置向导（选网关 → 选功能 → 密钥 → 选场景）
-  entity.py        实体基类
-  light / switch / sensor / binary_sensor / cover / button
-  const.py         类型映射与属性键
-  brand/           品牌图标
-  translations/    zh-Hans / en
-tools/live_check.py 现场自检脚本
-```
+| 设备类型 | HA 平台 | 说明 |
+|---|---|---|
+| 开关灯 / 调光 / 色温 / RGB(W) | `light` | 开 / 关 / 亮度（色温与颜色见「已知边界」） |
+| 插座 / 通用继电器触点 | `switch` | 开 / 关 |
+| 温度 / 湿度 / 照度 / CO₂ / PM2.5 / TVOC | `sensor` | ℃ / % / lx / ppm / µg/m³ |
+| 人体 / 门磁 / 烟感 / 燃气 / 水浸 / 求助 / 干接点 | `binary_sensor` | 报警 / 正常 |
+| 百叶 / 卷帘 / 开合帘 / 开关停窗帘 | `cover` | 开 / 关 / 停 / 位置百分比 |
+| 空调 / 中央空调 | `climate` | 开关 / 模式 / 风速 / 设定温度 / 室温 |
+| 风机 | `fan` | 开关 + 档位 |
+| 新风 / 加湿 | `humidifier` | 开关 + 模式，回传 CO₂ / PM2.5 / 湿度 |
+| 门锁 / 阀门 / 扫地机 | `lock` / `valve` / `vacuum` | 开锁、开关阀、启动回充 |
+| 网关场景 | `button` | 每场景一个按钮，按下即执行 |
 
----
-
-## 10. 支持
-
-- 问题与需求：本仓库 Issues
-- 版本记录见 Releases / 提交历史
+同一设备下重名会自动补通道号（如「客厅灯（通道 02）」）。
 
 ---
 
-## 11. HDL → HA：用场景事件做反向控制
+## 5. 服务与事件
 
-网关**不会**把控制指令下发给 LINK 客户端（实测 `property/down` 只路由给驱动，客户端收不到），
-所以反向控制只能用网关已有的上行通道：**HDL 场景执行事件**。
-
-实测：执行 LINK 场景后，网关会推
-
-```
-/user/{gw}/custom/scene/status/up      # 场景执行
-/user/{gw}/custom/logic/status/up      # 逻辑动作
-/base/{gw}/thing/property/up           # 受影响设备的状态变化
-```
-
-这些帧和属性上报一样是 AES-128-CBC（key = iv = 本地密钥），所以**必须配置本地密钥**才能解析。
-解析成功后集成会触发事件 `hdl_link_hdl_event`：
-
-```yaml
-# 自动化示例：HDL 面板按下「回家」场景 → 打开 HA 里的米家灯
-alias: HDL 场景触发 HA 动作
-trigger:
-  - platform: event
-    event_type: hdl_link_hdl_event
-    event_data:
-      kind: scene
-      name: 回家走廊灯
-action:
-  - service: light.turn_on
-    target:
-      entity_id: light.keting
-```
-
-在 HDL 侧把面板按键绑定到该场景（面板绑定命令），面板按键就变成「HA 遥控器」，
-延迟通常 1 秒内。
-
-要真正的实时下行控制（网关把控制直接送到 HA 端），需要网关侧有一个注册驱动接收
-`property/down`（`driver_name` + 驱动配置表），当前开源集成做不到这一步。
-
----
-
-## 12. HA 驱动后端（供网关侧驱动对接）
-
-集成内置了一套「驱动后端」接口，网关侧只要有驱动进程（driver_name=ha）就能直接对接：
-
-| 接口 | 用途 |
+| 服务 | 作用 |
 |---|---|
-| `GET /api/hdl_link/driver/devices` | 全量 HA 设备清单：实体、域、spk、当前状态、oid/sid、是否已注册 |
-| `POST /api/hdl_link/driver/down` | 驱动把网关下行转给 HA 执行：`{"objects":[{"sid","status":[{key,value}]}]}` |
-| `POST /api/hdl_link/driver/edit` | 编辑已注册功能：`{"entity_id","action":"rename|set_spk|delete","name"/"spk"}` |
-| `POST /api/hdl_link/driver/remove_device` | 整台设备移除出网关：`{"oid"/"device_id"}` → 删功能点、删设备、清映射、清镜像设备 |
-| `POST /api/hdl_link/driver/register` | 把 sid 以 `driver_name` 上报网关（验证驱动是否就绪） |
+| `hdl_link.bind` | 把 HDL 面板按键 / 场景 / 逻辑的 SID 绑定到 HA 实体：`mode=action` 每按一次执行一次动作（面板键当遥控器），`mode=follow` 跟随属性状态 |
+| `hdl_link.scene_list` | 列出网关场景 + 绑定状态 + 失效绑定，排查「面板按了没反应」 |
 
-现成的驱动代理脚本：`tools/hdl_ha_driver.py`（仅标准库，跑在局域网任意机器）
-
-```bat
-python tools\hdl_ha_driver.py --gateway 192.168.1.151 --name ha ^
-       --ha-url http://172.26.30.104:8123 --ha-token <HA长效令牌>
-```
-
-**已知硬门槛**：`driverconfig/edit` 会校验驱动是否已安装，未安装直接返回
-`500001「驱动不存在」`（实测）。所以脚本能跑通状态上报，但**收不到下行**——
-除非网关侧已经装好名为 `ha` 的驱动（需要驱动安装包 / 驱动证书）。
+每条 HDL 上行都会在事件总线 fire `hdl_link_hdl_event`，字段 `gateway / kind / sid / name / raw`，可直接在自动化里用。
 
 ---
 
-## 13. 功能点直接绑定（HDL 功能 SID → HA 实体，不走场景中转）
+## 6. 协议速查
 
-把任意一个 HDL **功能点 SID** 直接绑到 HA 实体，状态一变就下发 HA：
+| 用途 | Topic | 说明 |
+|---|---|---|
+| 搜索网关 | `/user/all/custom/gateway/search`（UDP 8585） | 组播 + 广播 |
+| 功能列表 | `/user/{oid}/custom/function/list/get` | JSON |
+| 属性定义 | `/user/{oid}/custom/function/attribute/get` | JSON |
+| 场景列表 / 执行 | `/user/{oid}/custom/scene/list/get` / `scene/execute` | JSON |
+| 房间 | `/user/{oid}/custom/room/list/get` | JSON |
+| 读状态 | `/base/{oid}/thing/property/read` | JSON |
+| 控制 | `/base/{oid}/thing/property/down` | JSON |
+| 状态上报 | `/base/{oid}/thing/property/up` | 未配密钥时是加密二进制 |
 
-- `mode="follow"`（默认）：状态原样跟随 —— 开关/亮度/色温/RGB/窗帘位置/空调温度模式风速；
-- `mode="action"`：状态变化只触发一个动作（`toggle` / `turn_on` / `open` / `run` …），面板键当遥控器。
+TCP 帧格式：
 
-上行来源（实机验证）：`/base/{gw}/thing/property/up` 功能点状态上报，以及
-`/user/{gw}/custom/{scene,logic}/status/up` 场景/逻辑事件；两路都按 **SID** 判断，
-命中绑定表才下发，命不中只记录到 `seen`（方便你挑 SID）。自己注册进网关的 HA 设备
-SID 会被自动排除，避免自己发 up 造成回环。
-
-```bash
-# 1) 先在面板上操作一次，让集成把功能 SID 记进 seen
-curl -H "Authorization: Bearer <token>" http://<ha>:8123/api/hdl_link/binding
-
-# 2) 直接绑定：功能 sid → HA 灯，跟随
-curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
-  -d '{"sid":"0201016AFD412506000000000003","entity_id":"light.keting","mode":"follow"}' \
-  http://<ha>:8123/api/hdl_link/binding
-
-# 3) 面板键当遥控器：只在"开"的时候触发 toggle
-curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
-  -d '{"sid":"<面板按键功能sid>","entity_id":"light.keting","mode":"action","action":"toggle","trigger":"on"}' \
-  http://<ha>:8123/api/hdl_link/binding
+```
+Topic:/base/{oid}/thing/property/down\r\n
+Length: <body 字节数>\r\n
+\r\n
+{"id":"…","objects":[…],"time_stamp":"…"}
 ```
 
-`mode`：`follow / action`；`action`：`turn_on / turn_off / toggle / open / close / run`；
-`trigger`：`any / on / off`。删除绑定：同接口传 `"entity_id": null`。
-旧地址 `/api/hdl_link/event_map` 仍可用，语义已改为功能点绑定。
 ---
 
-## 14. HDL 面板 → HA：为什么只有场景这条路
+## 7. 与旧版（≤2.9.x）的区别
 
-实测（151 网关，HDL IP Tool 同时监听 8586）结论，写在前面免得反复试：
+2.x 会在网关里自动安装一个 Python「HA 驱动」，用来把 HA 设备反写进 HDL（网关 App/面板可控 HA、HA 状态推到 HDL）。
+这需要往网关塞文件、走 OTA、占用网关资源，还要长期维护驱动版本。
 
-| 现象 | 结果 |
-| --- | --- |
-| 面板/App 控 HA 虚拟功能点（无驱动接管） | 网关**既不推 `property/down`，也不改自己存的状态**；`down` 回 `Success` 但 `read` 读回仍原值 |
-| 集成自己发 `property/up` | 广播给其它连接，发送者自身无回显 |
-| 面板按键触发**场景** | 网关真实广播 `/user/{gw}/custom/scene/status/up`（实测一次执行收到 6 条事件） |
+3.0.0 起彻底去掉网关侧驱动，只保留 **HDL → HA** 方向（读、控、事件）。因此：
 
-所以 HDL → HA 的现实可行链路是**面板键 → 场景 → HA**：
+- 不再有「安装集成时检测并安装驱动」
+- 不再有「设备同步（HA → HDL 写入）」面板，`scan / provision / sync` 三个服务一并移除
+- 状态默认靠轮询（5 秒），间隔越小越跟手，代价是网关请求变多
 
-1. HDL 侧（App 的"场景"或 Studio）把面板键绑定到某个场景（含一台 HA 虚拟设备也行）；
-2. 面板按下，网关广播 `scene/status/up`，集成收到后按绑定表执行 HA 服务；
-3. 绑定必须用 `mode=action`（事件没有属性 status 可翻译），例如：
+---
 
-在 HA 的「开发者工具 → 动作 → YAML 模式」里直接调服务（不需要 token）：
+## 8. 已知边界
 
-```yaml
-action: hdl_link.bind
-data:
-  sid: "0201036AFD43B20A0A0100011100"
-  entity_id: light.ha_lamp
-  mode: action
-  action: toggle
-```
+- **状态实时性**：不配本地密钥时，网关不保证把属性变化推给第三方应用会话，靠轮询兜底；调小间隔可改善
+- **色温 / 颜色**：色温灯目前按可调光接入（亮度可用，色温下发未验证）
+- **进度类数据**：网关的 OTA / 驱动进度上行帧是加密且非 JSON，本集成不解析
 
-也可以用 HTTP 接口（需要长期访问令牌）：
+---
 
-```bash
-curl -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
-  -d '{"sid":"0201036AFD43B20A0A0100011100","entity_id":"light.ha_lamp","mode":"action","action":"toggle"}' \
-  http://<ha>:8123/api/hdl_link/binding
-```
+## 9. 常见问题
 
-- 未绑定的场景/逻辑事件会打 WARNING 并把 sid 记进 `seen`，面板下拉里就能选，不用手工抄。
-- 事件每次按下都执行，不参与状态去重（连按两次就是两次）。
-- `logic/status/up` 的 `status=success`、`enable=true` 同样按一次事件处理。
-## 15. 现场排查：`hdl_link.scene_list`
+**连不上**：确认 8586 可达（`Test-NetConnection <网关IP> -Port 8586`）。实测网关只开放 22 / 8586，没有本地 REST。
 
-面板按了没反应，先用一个服务把事实摊开（不用登网关、不用看日志）：
+**控制没反应**：先看日志里 `property/down` 的回执，`code=0` 表示网关已接收，实际动作取决于模块与工程配置；
+sid 是否在功能列表里可用 `hdl_link.scene_list` 或功能列表核查。
 
-```yaml
-action: hdl_link.scene_list
-```
+**网关重启后**：集成自动重连（`LinkClient` 内置重连），无需手动重载配置。
 
-返回内容（示例）：
+---
 
-```json
-{
-  "count": 3,
-  "bound": 1,
-  "unbound": ["回家走廊灯", "看电影"],
-  "scenes": [
-    {"sid": "0201036AFD43B20A0A0100011100", "name": "回家走廊灯", "status": "off",
-     "bound": true, "entity_id": "light.ha_lamp", "mode": "action",
-     "action": "toggle", "trigger": "any"}
-  ],
-  "orphan_bindings": [{"sid": "0201036AFD43B20A0A0100011199", "entity_id": "light.old"}]
-}
-```
+## 许可证
 
-判读方式：
-
-- `unbound` 里的场景：面板按了也不会动，因为 HA 侧没有绑定 → 用 `hdl_link.bind` 补绑。
-- `orphan_bindings` 里的 sid：HA 绑了，但网关里已经没有这个场景（改名/重建/被覆盖）→ 重新绑新 sid。
-- `scenes` 全为空：面板键根本没指向任何场景，问题在 HDL 侧（App/Studio 的按键配置）。
-
-## 16. 不要用 LINK 写场景（重要）
-
-`scene/add` 在实测中表现为**整表替换**语义：一次 `scene/add` 之后，网关里原有的场景会消失（两次实证）。因此在"只用开放 LINK 协议"的前提下：
-
-- 集成**只读场景**（`scene/list/get`、`scene/get`），运行期永不调用 `scene/add` / `scene/delete`；
-- 需要新场景就在 HDL App / Studio 里建（那里是网关原生语义，不会误删），建完集成这边一条 `hdl_link.bind` 就接上。
-
-这样避免了"一条命令抹掉客户现场全部场景"的灾难风险。
-
-## 安装集成时自动保障 HA 驱动（2.9.1+）
-
-集成本身带一份 HA 驱动安装包（`custom_components/hdl_link/driver_pkg/`），装载配置条目时会先用
-Studio 同款 hex 协议（TCP 8586）读一遍网关驱动列表：
-
-- 网关已有 `HA` / `00898978` → 什么都不做；
-- 网关没有 → 直接把这个本地包通过 8586 装进网关，LINK 解包后会自动 `install.sh` 并拉起驱动，随后二次读列表确认。
-
-这条链路**不涉及任何账号密码**，也不走云端 URL 推送，安装包就是集成目录里的本地文件。
-
-踩过的硬约束（改包时别踩）：zip 里必须带**目录条目**（`HA/`、`HA/config/`），
-否则网关会回「解压失败，没有驱动根目录」，安装直接失败。
-
-驱动安装失败不会阻断集成加载，只会打一条 `WARNING` 日志；升级安装时网关会保留现场
-`config/ha_map.json`（只做 `.bak` 备份，不覆盖），所以令牌和 13 台映射不会丢。
+MIT

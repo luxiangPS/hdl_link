@@ -7,7 +7,6 @@ from typing import Final
 DOMAIN: Final = "hdl_link"
 NAME: Final = "HDL LINK"
 MANUFACTURER: Final = "HDL（河东科技）"
-MODEL_PREFIX: Final = "HDL LINK"
 
 # ------------------------------------------------------------------ 配置键
 CONF_HOST: Final = "host"
@@ -21,8 +20,9 @@ CONF_LOCAL_SECRET: Final = "local_secret"   # 可选：网关本地加密密钥�
 
 DEFAULT_PORT: Final = 8586
 UDP_SEARCH_PORT: Final = 8585           # 本地搜索（广播）端口
-DEFAULT_POLL_INTERVAL: Final = 0       # 秒；0 = 不做周期轮询，状态由网关主动上报
-MIN_POLL_INTERVAL: Final = 0
+# 秒；纯本地对接（不在网关装驱动）时网关不保证主动上报，默认 5 秒读一次属性
+DEFAULT_POLL_INTERVAL: Final = 5
+MIN_POLL_INTERVAL: Final = 0           # 0 = 关闭轮询，只靠主动上报（需配本地密钥）
 MAX_POLL_INTERVAL: Final = 120
 
 # ------------------------------------------------------------------ LINK 主题
@@ -39,173 +39,6 @@ TOPIC_PROPERTY_READ: Final = "/base/{gw}/thing/property/read"
 TOPIC_PROPERTY_DOWN: Final = "/base/{gw}/thing/property/down"
 # 上行属性上报：网关只认这条主题判定功能点在线（实测：上报后 online=true、status 有值）
 TOPIC_PROPERTY_UP: Final = "/base/{gw}/thing/property/up"
-
-# ------------------------------------------------------- 设备/功能 增删改（写入网关）
-# 对应 HDL《LINK主网关协议<->调试软件》：先开编辑开关，再增删改物理模型与功能点
-TOPIC_REMOTE_CONFIG_EDIT: Final = "/user/{gw}/custom/remoteconfig/edit"
-TOPIC_DEVICE_ADD: Final = "/user/{gw}/custom/device/add"
-TOPIC_DEVICE_DELETE: Final = "/user/{gw}/custom/device/delete"
-TOPIC_DEVICE_EDIT: Final = "/user/{gw}/custom/device/edit"
-TOPIC_FUNCTION_ADD: Final = "/user/{gw}/custom/function/attribute/add"
-TOPIC_FUNCTION_EDIT: Final = "/user/{gw}/custom/function/attribute/edit"
-TOPIC_FUNCTION_DELETE: Final = "/user/{gw}/custom/function/attribute/delete"
-TOPIC_TOPO_FOUND: Final = "/base/{gw}/thing/topo/found"
-
-# 驱动名：Buspro 驱动 / LINK(a) 驱动；写入第三方设备挂在 "a" 驱动下
-DRIVER_A: Final = "a"
-PROVISION_VERSION: Final = "2.2.0"
-STORAGE_KEY: Final = "hdl_link.provision"
-STORAGE_VERSION: Final = 1
-
-# 可供选择的功能类型（spk）与展示名：来自 SPK_PLATFORM，再补几个写入用的
-PROVISIONABLE_SPK: Final[tuple[str, ...]] = (
-    "light.switch",
-    "light.dimming",
-    "light.cct",
-    "light.rgb",
-    "light.rgbw",
-    "panel.socket",
-    "other.common",
-    "curtain.switch",
-    "curtain.trietex",
-    "curtain.roller",
-    "curtain.shades",
-    "sensor.temperature",
-    "sensor.humidity",
-    "sensor.light",
-    "sensor.co2",
-    "sensor.pm25",
-    "sensor.tvoc",
-    "sensor.pir",
-    "sensor.doorwindow",
-    "sensor.smoke",
-    "sensor.gas",
-    "sensor.water",
-    "sensor.help",
-    "sensor.dryContact",
-    "hvac.ac",
-    "hvac.fan",
-    "hvac.airFresh",
-    "hvac.cac",
-)
-
-# 每个 spk 需要的属性定义（写入 function/attribute/add 的 attributes）
-SPK_ATTRIBUTE_SCHEMA: Final[dict[str, list[dict[str, str]]]] = {
-    "light.switch": [{"key": "on_off", "data_type": "boolean"}],
-    "light.dimming": [
-        {"key": "on_off", "data_type": "boolean"},
-        {"key": "brightness", "data_type": "int", "min": "0", "max": "100"},
-    ],
-    "light.cct": [
-        {"key": "on_off", "data_type": "boolean"},
-        {"key": "brightness", "data_type": "int", "min": "0", "max": "100"},
-        {"key": "color_temp", "data_type": "int", "min": "2700", "max": "6500"},
-    ],
-    "light.rgb": [
-        {"key": "on_off", "data_type": "boolean"},
-        {"key": "brightness", "data_type": "int", "min": "0", "max": "100"},
-        {"key": "rgb", "data_type": "string"},
-    ],
-    "light.rgbw": [
-        {"key": "on_off", "data_type": "boolean"},
-        {"key": "brightness", "data_type": "int", "min": "0", "max": "100"},
-        {"key": "rgb", "data_type": "string"},
-        {"key": "white", "data_type": "int", "min": "0", "max": "100"},
-    ],
-    "panel.socket": [{"key": "on_off", "data_type": "boolean"}],
-    "other.common": [{"key": "on_off", "data_type": "boolean"}],
-    "curtain.switch": [{"key": "on_off", "data_type": "boolean"}],
-    "curtain.trietex": [{"key": "position", "data_type": "int", "min": "0", "max": "100"}],
-    "curtain.roller": [{"key": "position", "data_type": "int", "min": "0", "max": "100"}],
-    "curtain.shades": [{"key": "position", "data_type": "int", "min": "0", "max": "100"}],
-    "sensor.temperature": [{"key": "temperature", "data_type": "float", "min": "-40", "max": "120"}],
-    "sensor.humidity": [{"key": "humidity", "data_type": "float", "min": "0", "max": "100"}],
-    "sensor.light": [{"key": "illuminance", "data_type": "float", "min": "0", "max": "100000"}],
-    "sensor.co2": [{"key": "co2", "data_type": "float", "min": "0", "max": "5000"}],
-    "sensor.pm25": [{"key": "pm25", "data_type": "float", "min": "0", "max": "1000"}],
-    "sensor.tvoc": [{"key": "tvoc", "data_type": "float", "min": "0", "max": "5000"}],
-    "sensor.pir": [{"key": "people_status", "data_type": "boolean"}],
-    "sensor.doorwindow": [{"key": "door_status", "data_type": "boolean"}],
-    "sensor.smoke": [{"key": "smoke_status", "data_type": "string", "value": ["normal", "alarm"]}],
-    "sensor.gas": [{"key": "gas_status", "data_type": "string", "value": ["normal", "alarm"]}],
-    "sensor.water": [{"key": "water_status", "data_type": "string", "value": ["normal", "alarm"]}],
-    "sensor.help": [{"key": "sos_status", "data_type": "string", "value": ["normal", "alarm"]}],
-    "sensor.dryContact": [{"key": "on_off", "data_type": "string", "value": ["on", "off"]}],
-    "hvac.ac": [
-        {"key": "on_off", "data_type": "boolean"},
-        {"key": "mode", "data_type": "string", "value": ["cool", "heat", "fan", "auto", "dry"]},
-        {"key": "fan", "data_type": "string", "value": ["high", "medium", "low", "auto"]},
-        {"key": "set_temp", "data_type": "float", "min": "16", "max": "30"},
-        {"key": "swing", "data_type": "string", "value": ["on", "off"]},
-        {"key": "room_temp", "data_type": "float"},
-    ],
-    "hvac.cac": [
-        {"key": "on_off", "data_type": "boolean"},
-        {"key": "cac_valve", "data_type": "string", "value": ["on", "off"]},
-        {"key": "fh_valve", "data_type": "string", "value": ["on", "off"]},
-        {"key": "set_temp", "data_type": "float", "min": "16", "max": "30"},
-        {"key": "room_temp", "data_type": "float"},
-    ],
-    "hvac.fan": [
-        {"key": "on_off", "data_type": "boolean"},
-        {"key": "fan_speed_percent", "data_type": "int", "min": "1", "max": "8"},
-    ],
-    "hvac.airFresh": [
-        {"key": "on_off", "data_type": "boolean"},
-        {"key": "mode", "data_type": "string", "value": ["auto", "manual", "timer", "smart"]},
-        {"key": "co2", "data_type": "float"},
-        {"key": "pm25", "data_type": "float"},
-        {"key": "humidity", "data_type": "float"},
-    ],
-}
-
-# 扫描时跳过的域（系统/不可控，写进 HDL 没有意义）
-SCAN_SKIP_DOMAINS: Final[frozenset[str]] = frozenset(
-    {
-        "update",
-        "persistent_notification",
-        "person",
-        "sun",
-        "zone",
-        "tag",
-        "tts",
-        "stt",
-        "conversation",
-        "assist_satellite",
-        "notify",
-        "event",
-        "todo",
-        "device_tracker",
-        "weather",
-        "number",
-        "select",
-        "text",
-        "time",
-        "date",
-        "datetime",
-        "image",
-    }
-)
-
-# 扫描时纳入的域（顺序即 UI 展示顺序）
-SCAN_DOMAINS: Final[tuple[str, ...]] = (
-    "light",
-    "switch",
-    "cover",
-    "climate",
-    "fan",
-    "media_player",
-    "water_heater",
-    "humidifier",
-    "lock",
-    "vacuum",
-    "valve",
-    "siren",
-    "sensor",
-    "binary_sensor",
-)
-
-SIGNAL_UPDATE: Final = f"{DOMAIN}_update"
 
 # ------------------------------------------------------------------ 类型映射
 # spk -> (平台, 展示名)

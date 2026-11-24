@@ -1,21 +1,22 @@
 """HDL LINK 集成入口：一个配置条目 = 一个 HDL 主网关。
 
-除了实体平台，还注册：
-- REST 接口 /api/hdl_link/scan | provision | mapping
-- 侧边栏面板「HDL 设备同步」（扫描 HA 设备 → 勾选 → 写入 HDL 网关）
-- 服务 hdl_link.scan / hdl_link.provision（供自动化与脚本调用）
+纯本地对接模式（对齐 HDL 开放平台《本地协议对接》的「本地三方应用」流程）：
+- 连接网关 TCP 8586，只走 JSON 主题帧，**不在网关侧安装任何驱动**
+- 读功能点 / 属性定义 / 场景 / 房间，控制走 /base/{oid}/thing/property/down
+- 状态靠周期读 + 网关可选的主动上报（配了本地密钥才解得上报帧）
+
+保留的服务：
+- hdl_link.bind        面板按键 / 场景 sid 绑定到 HA 实体或动作
+- hdl_link.scene_list  列出网关场景 + 当前绑定情况（排查用）
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from pathlib import Path
 
 import voluptuous as vol
 
-from homeassistant.components import panel_custom
-from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
@@ -25,12 +26,7 @@ from homeassistant.helpers import device_registry as dr
 
 from .const import CONF_GW_ID, DOMAIN, MANUFACTURER
 from .coordinator import HdlCoordinator
-from .driver_ota import async_ensure_ha_driver
-from .http_api import VIEWS
 from .protocol import LinkError
-from .provision import async_provision, async_sync_states
-from .scan import async_scan
-from .state_push import async_setup_state_push, async_unload_state_push
 
 LOGGER = logging.getLogger(__name__)
 
@@ -45,15 +41,6 @@ PLATFORMS: list[Platform] = [
 
 HEARTBEAT_INTERVAL = 30
 
-PANEL_URL_PATH = "hdl-device-sync"
-PANEL_COMPONENT = "hdl-link-provision"
-STATIC_URL = "/hdl_link_static"
-PANEL_JS = Path(__file__).parent / "frontend"
-PANEL_VERSION = "2.9.1"
-
-SERVICE_SCAN = "scan"
-SERVICE_PROVISION = "provision"
-SERVICE_SYNC = "sync"
 SERVICE_BIND = "bind"
 SERVICE_SCENE_LIST = "scene_list"
 
@@ -69,18 +56,11 @@ BIND_SCHEMA = vol.Schema(
         vol.Optional("name"): cv.string,
     }
 )
-PROVISION_SCHEMA = vol.Schema(
-    {
-        vol.Required("devices"): vol.All(cv.ensure_list, [dict]),
-        vol.Optional("dry_run", default=True): cv.boolean,
-        vol.Optional("entry_id"): cv.string,
-    }
-)
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigEntry) -> bool:
-    """集成装载时注册静态资源/面板/接口/服务（必须在 HTTP 服务启动前完成）。"""
-    await _async_setup_provision(hass)
+    """注册服务（不依赖 HTTP / 面板，启动顺序无关）。"""
+    _async_register_services(hass)
     return True
 
 
@@ -98,18 +78,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
-    # 装上集成顺手兜底驱动：网关侧没有 HA 驱动就用本地包自动装（零凭据、不走云端）
-    try:
-        driver_state = await async_ensure_ha_driver(
-            coordinator.gateway.host,
-            coordinator.gw_id,
-            token=str(entry.options.get("ha_token") or entry.data.get("ha_token") or ""),
-            base_url=str(hass.config.internal_url or ""),
-        )
-        hass.data.setdefault(f"{DOMAIN}_driver", {})[entry.entry_id] = driver_state
-    except Exception as err:  # noqa: BLE001 - 驱动保障失败不能影响集成加载
-        LOGGER.warning("HA 驱动检测/自动安装跳过: %s", err)
-
     # 网关自身作为一个 HA 设备（其余实体通过 via_device 挂到它下面）
     device_registry = dr.async_get(hass)
     device_registry.async_get_or_create(
@@ -124,28 +92,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
-    await _async_setup_provision(hass)
-
-    # HA 状态变更 → 实时上报 HDL（只推网关里真实存在的 sid）
-    try:
-        pusher = await async_setup_state_push(hass, coordinator)
-        hass.data.setdefault(f"{DOMAIN}_pushers", {})[entry.entry_id] = pusher
-    except Exception as err:  # noqa: BLE001 - 状态同步失败不影响实体
-        pusher = None
-        LOGGER.warning("启动状态同步失败: %s", err)
-
     async def _heartbeat_loop() -> None:
-        """心跳 + 兜底保活：状态变更已经实时上报，这里只保证 online 不掉。"""
+        """心跳保活 + 兜底刷新（网关不主动上报时靠这里把状态拉回来）。"""
         while True:
             await asyncio.sleep(HEARTBEAT_INTERVAL)
             await coordinator.gateway.async_heartbeat()
             try:
-                if pusher is not None:
-                    await pusher.async_push_all()
-                else:
-                    await async_sync_states(hass, coordinator)
+                await coordinator.async_poll_now()
             except Exception as err:  # noqa: BLE001 - 保活失败不能中断循环
-                LOGGER.warning("保活上报失败: %s", err)
+                LOGGER.warning("周期刷新失败: %s", err)
 
     entry.async_create_background_task(hass, _heartbeat_loop(), f"{DOMAIN}-heartbeat")
     return True
@@ -154,8 +109,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """卸载：停平台、关连接。"""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    pusher = (hass.data.get(f"{DOMAIN}_pushers") or {}).pop(entry.entry_id, None)
-    async_unload_state_push(pusher)
     coordinator: HdlCoordinator | None = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
     if coordinator is not None:
         await coordinator.async_close()
@@ -166,92 +119,18 @@ async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> Non
     await hass.config_entries.async_reload(entry.entry_id)
 
 
-# ------------------------------------------------------------------ 同步能力（只注册一次）
-async def _async_setup_provision(hass: HomeAssistant) -> None:
-    """注册静态资源、REST 接口、侧边栏面板与两个服务。"""
-    flag_key = f"{DOMAIN}_provision_ready"
-    static_key = f"{DOMAIN}_static_ready"
+def _async_register_services(hass: HomeAssistant) -> None:
+    """注册 bind / scene_list 两个服务（只注册一次）。"""
+    flag_key = f"{DOMAIN}_services_ready"
     if hass.data.get(flag_key):
         return
     hass.data[flag_key] = True
 
-    # 1) 面板前端静态文件（必须在 HTTP 服务启动阶段注册，晚于启动会被拒绝）
-    if not hass.data.get(static_key):
-        hass.data[static_key] = True
-        try:
-            await hass.http.async_register_static_paths(
-                [StaticPathConfig(STATIC_URL, str(PANEL_JS), cache_headers=False)]
-            )
-        except RuntimeError as err:  # 已注册或 HTTP 已启动
-            LOGGER.warning("静态路径注册失败（面板 JS 可能 404）: %s", err)
-
-    # 2) REST 接口
-    for view in VIEWS:
-        try:
-            hass.http.register_view(view)
-        except Exception as err:  # noqa: BLE001 - 已注册则跳过
-            LOGGER.debug("REST 视图已存在: %s", err)
-
-    # 3) 侧边栏面板
-    try:
-        await panel_custom.async_register_panel(
-            hass,
-            frontend_url_path=PANEL_URL_PATH,
-            webcomponent_name=PANEL_COMPONENT,
-            sidebar_title="HDL 设备同步",
-            sidebar_icon="mdi:swap-horizontal",
-            module_url=f"{STATIC_URL}/provision.js?v={PANEL_VERSION}",
-            require_admin=False,
-            embed_iframe=False,
-        )
-        LOGGER.info("已注册侧边栏面板 %s -> %s", PANEL_URL_PATH, f"{STATIC_URL}/provision.js")
-    except Exception as err:  # noqa: BLE001 - 面板注册失败不影响服务
-        LOGGER.warning("注册 HDL 设备同步面板失败: %s", err)
-
-    # 4) 服务
     def _coordinator(entry_id: str | None = None) -> HdlCoordinator | None:
         data = hass.data.get(DOMAIN) or {}
         if entry_id and entry_id in data:
             return data[entry_id]
         return next(iter(data.values())) if data else None
-
-    async def _handle_scan(call: ServiceCall) -> dict:
-        return await async_scan(hass)
-
-    async def _handle_provision(call: ServiceCall) -> dict:
-        coordinator = _coordinator(call.data.get("entry_id"))
-        if coordinator is None:
-            raise ValueError("HDL LINK 尚未配置")
-        return await async_provision(
-            hass,
-            coordinator,
-            {"devices": call.data["devices"]},
-            dry_run=call.data.get("dry_run", True),
-        )
-
-    if not hass.services.has_service(DOMAIN, SERVICE_SCAN):
-        hass.services.async_register(
-            DOMAIN,
-            SERVICE_SCAN,
-            _handle_scan,
-            schema=SCAN_SCHEMA,
-            supports_response=SupportsResponse.OPTIONAL,
-        )
-    if not hass.services.has_service(DOMAIN, SERVICE_PROVISION):
-        hass.services.async_register(
-            DOMAIN,
-            SERVICE_PROVISION,
-            _handle_provision,
-            schema=PROVISION_SCHEMA,
-            supports_response=SupportsResponse.OPTIONAL,
-        )
-
-    async def _handle_sync(call: ServiceCall) -> dict:
-        coordinator = _coordinator(call.data.get("entry_id"))
-        if coordinator is None:
-            raise ValueError("HDL LINK 尚未配置")
-        pushed = await async_sync_states(hass, coordinator)
-        return {"pushed": pushed}
 
     async def _handle_bind(call: ServiceCall) -> dict:
         from .events import async_set_mapping
@@ -296,30 +175,5 @@ async def _async_setup_provision(hass: HomeAssistant) -> None:
             supports_response=SupportsResponse.OPTIONAL,
         )
 
-    if not hass.services.has_service(DOMAIN, SERVICE_SYNC):
-        hass.services.async_register(
-            DOMAIN,
-            SERVICE_SYNC,
-            _handle_sync,
-            schema=SCAN_SCHEMA,
-            supports_response=SupportsResponse.OPTIONAL,
-        )
-
 
 __all__ = ["async_setup_entry", "async_unload_entry", "CONF_GW_ID"]
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

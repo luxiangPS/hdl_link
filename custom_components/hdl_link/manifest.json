@@ -5,22 +5,16 @@
     "@HDL"
   ],
   "config_flow": true,
-  "dependencies": [
-    "http",
-    "panel_custom"
-  ],
-  "after_dependencies": [
-    "frontend"
-  ],
+  "dependencies": [],
+  "after_dependencies": [],
   "documentation": "https://github.com/luxiangPS/hdl_link",
   "integration_type": "hub",
-  "iot_class": "local_push",
+  "iot_class": "local_polling",
   "issue_tracker": "https://github.com/luxiangPS/hdl_link/issues",
   "loggers": [
     "custom_components.hdl_link"
   ],
   "quality_scale": "bronze",
   "requirements": [],
-  "version": "2.9.1"
+  "version": "3.0.0"
 }
-

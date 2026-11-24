@@ -221,17 +221,6 @@ async def async_handle(
             continue
 
         rule = data["sids"].get(sid)
-        auto = None
-        if rule is None and kind in ("down", "function", "up"):
-            # 网关把面板/App 对 HA 虚拟设备的控制当成属性变更，以 property/up 广播回来
-            #（实测：按一次「虚拟可调灯」就收到一条 up，sids=该虚拟 sid，没有 down）
-            # 这类 sid 直接用 provision 映射自动执行
-            from .provision import async_entity_for_sid
-
-            auto = await async_entity_for_sid(hass, sid)
-            if auto:
-                rule = {"entity_id": auto.get("entity_id"), "spk": auto.get("spk"),
-                        "mode": "follow", "trigger": "any"}
         if not rule:
             control_like = {"on_off", "brightness", "percent", "position", "cct", "mode", "set_temp"}
             if is_event:
@@ -255,14 +244,9 @@ async def async_handle(
             key = ";".join(sorted(f"{k}={v}" for k, v in values.items()))
             if kind != "down" and data["state"].get(sid) == key:
                 # 同一份 status 已经下发过，重复上报（含自己发 up 的回环）不再执行
-                if auto:
-                    LOGGER.warning("HDL 控制被去重跳过: sid=%s status=%s（与上次相同）", sid, values)
                 continue
             data["state"][sid] = key
             if not should_fire(rule.get("trigger") or "any", values, status):
-                if auto:
-                    LOGGER.warning("HDL 控制未满足触发条件 %s: sid=%s status=%s",
-                                   rule.get("trigger"), sid, values)
                 continue
 
         entity_id = rule.get("entity_id") or ""
