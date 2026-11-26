@@ -124,6 +124,14 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return unload_ok
 
 
+async def async_remove_config_entry_device(
+    hass: HomeAssistant, entry: ConfigEntry, device_entry: dr.DeviceEntry
+) -> bool:
+    """允许在设备页直接删掉网关里已不存在的残留设备（历史会话/换网关留下的影子设备）。"""
+    LOGGER.info("移除 HDL LINK 残留设备: %s", device_entry.name)
+    return True
+
+
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
     await hass.config_entries.async_reload(entry.entry_id)
 
