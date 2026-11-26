@@ -40,8 +40,8 @@ data:
   "entity_id": "light.…",
   "label": "客厅灯",
   "scenes": [
-    {"sid": "…", "name": "客厅灯 开", "add_code": "0", "add_msg": "Success", "present": true},
-    {"sid": "…", "name": "客厅灯 关", "add_code": "0", "add_msg": "Success", "present": true}
+    {"name": "客厅灯 开", "add_msg": "Success", "present": true},
+    {"name": "客厅灯 关", "add_msg": "Success", "present": true}
   ]
 }
 ```

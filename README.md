@@ -76,7 +76,7 @@ Home Assistant（本集成）  ──▶  HDL 网关  ──▶  Buspro / KNX / 
 | `hdl_link.scene_bridge` | 为某个 HA 实体在网关里生成一对「开 / 关」场景并自动绑定，实现 HDL 侧控制 HA（见 [docs/无驱动控制HA.md](docs/无驱动控制HA.md)） |
 | `hdl_link.scene_bridge_remove` | 拆除上面生成的场景桥 |
 
-每条 HDL 上行都会在事件总线 fire `hdl_link_hdl_event`，字段 `gateway / kind / sid / name / raw`，可直接在自动化里用。
+每条 HDL 上行都会在事件总线 fire `hdl_link_hdl_event`，字段包含网关 / 类型 / 标识 / 名称 / 原始数据，可直接在自动化里用。
 
 ---
 
