@@ -49,3 +49,23 @@ scene_list:
       description: 多网关时可指定；只有一个网关时留空。
       selector:
         text:
+scene_bridge:
+  name: 生成场景桥（无驱动反向控制）
+  description: 在 HDL 网关里为这个 HA 实体建一对「开 / 关」场景并自动绑定。之后在 Studio / App / 面板里点这两条场景就等于控制该 HA 实体，不需要在网关安装任何驱动。
+  fields:
+    entity_id:
+      name: HA 实体
+      description: 要被 HDL 场景控制的实体，例如 light.keting。
+      required: true
+      selector:
+        entity:
+    name:
+      name: 场景名前缀
+      description: 场景名会用「前缀 开 / 前缀 关」；留空则用实体名称。
+      selector:
+        text:
+    entry_id:
+      name: 配置条目
+      description: 多网关时可指定；只有一个网关时留空。
+      selector:
+        text:

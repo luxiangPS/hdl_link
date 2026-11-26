@@ -19,6 +19,8 @@ from .const import (
     TOPIC_ROOM_LIST,
     TOPIC_SCENE_EXECUTE,
     TOPIC_SCENE_LIST,
+    TOPIC_SCENE_ADD,
+    TOPIC_SCENE_DELETE,
 )
 from .protocol import LinkClient, LinkError
 
@@ -175,6 +177,31 @@ class HdlGateway:
         resp = await self.client.async_request(TOPIC_SCENE_LIST.format(gw=self.oid))
         objs = resp.get("objects") or []
         return [o for o in objs if isinstance(o, dict)] if isinstance(objs, list) else []
+
+    async def async_scene_add(self, sid: str, name: str) -> dict[str, Any]:
+        """在网关里建一条空动作场景（只当按键通道用：执行时网关广播 scene/status/up）。"""
+        resp = await self.client.async_request(
+            TOPIC_SCENE_ADD.format(gw=self.oid),
+            {"objects": [{"sid": sid, "name": name}]},
+            timeout=10,
+        )
+        return resp if isinstance(resp, dict) else {}
+
+    async def async_scene_delete(self, sid: str) -> dict[str, Any]:
+        resp = await self.client.async_request(
+            TOPIC_SCENE_DELETE.format(gw=self.oid),
+            {"objects": [{"sid": sid}]},
+            timeout=10,
+        )
+        return resp if isinstance(resp, dict) else {}
+
+    async def async_scene_execute(self, sid: str) -> dict[str, Any]:
+        resp = await self.client.async_request(
+            TOPIC_SCENE_EXECUTE.format(gw=self.oid),
+            {"objects": [{"sid": sid}]},
+            timeout=10,
+        )
+        return resp if isinstance(resp, dict) else {}
 
     # -------------------------------------------------------------- 读写属性
     async def async_read_properties(self, sids: list[str]) -> dict[str, dict[str, str]]:

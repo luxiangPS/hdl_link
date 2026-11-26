@@ -134,9 +134,69 @@ python tools/vad_bridge.py tools/vad_config.example.json
 ## 验证边界（别含糊）
 
 - **协议层已按官方文档实现并跑通仿真网关**（`python tests/test_vad_bridge.py`，0 项失败）。
-- **真机未验**：2026-11-26 本机网络在 `192.168.10.x`，网关 `192.168.1.151` 已不在同一网段
-  （UDP 8585 搜索无应答），因此这一步只能等接回现场网段后跑 `--auth-only`。
-- 真机上最可能卡住的两点：平台登记（mac/spk/secret 是否已录）、网关是否处于入网态。
+- **真机已验（2026-11-26，网关 MGWIP.430 / fw V03.11.19，HA Core 2026.11.2）**：
+  - 方向 HA → 网关（状态上报）：可用。HA 侧 `light.turn_on` 后，网关读回该虚拟功能点 `on_off=on`；
+    网关设备表里虚拟设备 `online=true`。
+  - 方向 网关 → HA（`property/down` 控制）：**网关不转发**。详见下一节。
+  - 场景执行事件反向控制：可用（见「3.3.0 场景桥」）。
+
+## 3.3.0 场景桥：网关不转发 down 时的可用通道（真机实测）
+
+### 实测结论
+
+| 试验 | 结果 |
+|---|---|
+| 授权连接下发 `/base/{DEV}/thing/property/down` | 网关回 `code=0, objects[{sid, tag:"Success"}]`，但设备 TCP 连接 **0 字节**（原始字节级读 12 秒） |
+| 同连接同 topic 下发给真实 buspro 灯 | 立即生效 → 下行通道本身与报文格式没问题 |
+| 完整官方流程（UDP/TCP 入网 → upload → topo → up → 心跳）后再下发 | 同样 0 帧 |
+| 入网请求补 `ip_address`、设备表补 `addresses` / `driver_code` / `sid` / `sids` / `online` | 设备表字段仍为空，down 仍不转发 |
+| 下发期间监听 UDP 8585（含组播 239.0.168.188）、TCP 8586/8587/8588/6000 | 没有任何设备方向报文或入站连接 |
+
+结论：**这台网关的 LINK 应用对三方设备只做「收 up、回 down_reply」，不把控制帧路由给设备连接**，
+与 HA 侧代码无关，也不是入网方式、字段缺失或 NAT 造成的。
+
+### 可用的控制通道：场景执行广播
+
+网关会广播：
+
+```
+/user/{gatewayId}/custom/scene/status/up   场景执行
+/user/{gatewayId}/custom/logic/status/up   逻辑执行
+/base/{gatewayId}/thing/property/up        真实设备状态变化
+```
+
+其中 `scene/status/up` 是**广播**，任意 TCP 客户端都能收到（实测另一条连接 8 秒内收到 1 帧）。
+Studio / App / 面板点场景、按绑定到场景的按键，走的都是这条。
+
+### 用法：一条服务，自动建场景 + 自动绑定
+
+```yaml
+action: hdl_link.scene_bridge
+data:
+  entity_id: light.b1_f1_0104_0201016afd412506020100080101
+  name: B1-F1-0104 通道 08
+  # entry_id: 多网关时指定
+```
+
+它做三件事：
+
+1. 按实体 id 生成一对稳定 sid（`020103` + md5(实体) 前 6 字节 + `010001` + `0001/0002`，14 字节）；
+2. 在网关里建两条空动作场景：`<name> 开` / `<name> 关`；
+3. 调 `hdl_link.bind` 把两条场景分别绑成 `turn_on` / `turn_off`。
+
+之后在 Studio / HDL App / 面板（按键绑场景）里点这两条场景，就是控制该 HA 实体。
+返回值为每条场景的 `sid / name / add_code`，便于排查。
+
+### 为什么用「空动作场景」而不是场景里放设备
+
+场景本身不需要任何 objects —— 它的价值只是「被执行时网关会广播一次事件」。
+所以不要在场景里塞 HDL 设备动作，否则会额外动真实回路。
+
+### 局限（说清楚）
+
+- HDL 侧看到的是**场景**，不是一台设备卡片；面板按键要绑到场景而不是"设备"。
+- 开/关分成两条场景（事件只带 sid + status，不带具体值）。
+- 虚拟设备本身仍然保留：它负责把 HA 状态同步回 HDL（App 里能看到状态）。
 
 ## 排障
 

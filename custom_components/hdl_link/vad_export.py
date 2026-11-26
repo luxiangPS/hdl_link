@@ -140,6 +140,7 @@ class VadExporter:
             mac_secret=secret,
             local_secret=None,
             on_down=self._async_on_down,
+            on_event=self._async_on_event,
             state_provider=lambda: {sid: dict(e.status) for sid, e in self._by_sid.items()},
         )
         self._task = self.hass.async_create_background_task(
@@ -212,3 +213,14 @@ class VadExporter:
                 domain, service, call["data"], blocking=False
             )
         LOGGER.info("Studio 控制 %s → %s", ent.name, status)
+
+    # ---------------------------------------------------------------- 场景事件
+    async def _async_on_event(self, kind: str, objects: list[dict]) -> None:
+        """场景桥：网关广播的场景/逻辑执行事件交给 events 模块的绑定表执行。
+
+        虚拟设备的 property/down 在各版本固件上并不一定会下发（实测网关只回
+        down_reply 不转发帧），所以面板/Studio 真正可用的控制通道是「场景执行」。
+        """
+        from .events import async_handle
+
+        await async_handle(self.hass, objects, kind=kind, own_sids=set(self._by_sid))

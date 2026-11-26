@@ -44,8 +44,16 @@ HEARTBEAT_INTERVAL = 30
 
 SERVICE_BIND = "bind"
 SERVICE_SCENE_LIST = "scene_list"
+SERVICE_SCENE_BRIDGE = "scene_bridge"
 
 SCAN_SCHEMA = vol.Schema({vol.Optional("entry_id"): cv.string})
+SCENE_BRIDGE_SCHEMA = vol.Schema(
+    {
+        vol.Required("entity_id"): cv.entity_id,
+        vol.Optional("name"): cv.string,
+        vol.Optional("entry_id"): cv.string,
+    }
+)
 BIND_SCHEMA = vol.Schema(
     {
         vol.Required("sid"): cv.string,
@@ -189,6 +197,48 @@ def _async_register_services(hass: HomeAssistant) -> None:
             SERVICE_SCENE_LIST,
             _handle_scene_list,
             schema=SCAN_SCHEMA,
+            supports_response=SupportsResponse.OPTIONAL,
+        )
+
+    async def _handle_scene_bridge(call: ServiceCall) -> dict:
+        """给一个 HA 实体在网关里建一对「开/关」场景并绑定。
+
+        网关不会把虚拟设备的 property/down 转发给三方设备（实测只回 down_reply），
+        但「场景执行」一定会广播 scene/status/up，所以 Studio / App / 面板里点这对
+        场景就等于控制 HA 实体，不需要在网关装任何驱动。
+        """
+        from .events import async_set_mapping
+        from .scene_bridge import scene_sids
+
+        coordinator = _coordinator(call.data.get("entry_id"))
+        if coordinator is None:
+            raise ValueError("HDL LINK 尚未配置")
+        entity_id = str(call.data["entity_id"])
+        state = hass.states.get(entity_id)
+        label = str(call.data.get("name") or (state.attributes.get("friendly_name") if state else "") or entity_id)
+        sid_on, sid_off = scene_sids(entity_id)
+        results = []
+        for sid, scene_name, action in (
+            (sid_on, f"{label} 开", "turn_on"),
+            (sid_off, f"{label} 关", "turn_off"),
+        ):
+            resp = await coordinator.gateway.async_scene_add(sid, scene_name)
+            code = str(resp.get("code") or "")
+            results.append({"sid": sid, "name": scene_name, "add_code": code,
+                            "add_msg": resp.get("msg")})
+            if code not in ("0", "", "500"):
+                continue
+            await async_set_mapping(
+                hass, sid, entity_id=entity_id, mode="action", action=action, name=scene_name
+            )
+        return {"entity_id": entity_id, "label": label, "scenes": results}
+
+    if not hass.services.has_service(DOMAIN, SERVICE_SCENE_BRIDGE):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_SCENE_BRIDGE,
+            _handle_scene_bridge,
+            schema=SCENE_BRIDGE_SCHEMA,
             supports_response=SupportsResponse.OPTIONAL,
         )
 

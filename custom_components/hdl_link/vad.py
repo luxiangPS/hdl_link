@@ -232,6 +232,7 @@ class VadBridge:
         on_down: Callable[[str, list[dict[str, str]]], Awable] | None = None,
         state_provider: Callable[[], dict[str, dict[str, str]]] | None = None,
         on_topo_delete: Callable[[str], Awable] | None = None,
+        on_event: Callable[[str, list[dict[str, Any]]], Awable] | None = None,
     ) -> None:
         self.host = host
         self.device = device
@@ -244,6 +245,7 @@ class VadBridge:
         self.remote_udp_port = remote_udp_port or udp_port
         self.local_secret = (local_secret or "").strip() or None
         self.on_down = on_down
+        self.on_event = on_event
         self.state_provider = state_provider
         self.on_topo_delete = on_topo_delete
 
@@ -451,6 +453,20 @@ class VadBridge:
             return
         if topic.endswith("/thing/property/read"):
             await self._handle_read(body)
+            return
+        if topic.endswith("/custom/scene/status/up") or topic.endswith("/custom/logic/status/up"):
+            # 场景/逻辑执行是网关广播事件：面板按键、Studio、App 触发场景后都会到这里。
+            # 这是「无驱动反向控制」除了 property/down 之外的第二条控制通道。
+            kind = "scene" if "/custom/scene/" in topic else "logic"
+            objects = body.get("objects") or []
+            if isinstance(objects, dict):
+                objects = [objects]
+            LOGGER.info("收到 %s 执行事件: %s", kind, [o.get("sid") for o in objects if isinstance(o, dict)])
+            if self.on_event is not None:
+                try:
+                    await self.on_event(kind, objects)
+                except Exception as err:  # noqa: BLE001
+                    LOGGER.exception("处理 %s 事件失败: %s", kind, err)
             return
         if topic.endswith("/thing/topo/delete/notify"):
             oid = ""
