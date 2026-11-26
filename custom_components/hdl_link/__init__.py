@@ -45,6 +45,7 @@ HEARTBEAT_INTERVAL = 30
 SERVICE_BIND = "bind"
 SERVICE_SCENE_LIST = "scene_list"
 SERVICE_SCENE_BRIDGE = "scene_bridge"
+SERVICE_SCENE_BRIDGE_REMOVE = "scene_bridge_remove"
 
 SCAN_SCHEMA = vol.Schema({vol.Optional("entry_id"): cv.string})
 SCENE_BRIDGE_SCHEMA = vol.Schema(
@@ -231,13 +232,47 @@ def _async_register_services(hass: HomeAssistant) -> None:
             await async_set_mapping(
                 hass, sid, entity_id=entity_id, mode="action", action=action, name=scene_name
             )
+            await asyncio.sleep(1)
+        # 建完回读一遍，确认两条场景都真的落到网关里（网关会静默丢弃不完整的 add）
+        try:
+            scenes = await coordinator.gateway.async_scenes()
+        except Exception:  # noqa: BLE001
+            scenes = []
+        existing = {str(s.get("sid") or "") for s in scenes}
+        for item in results:
+            item["present"] = item["sid"] in existing
         return {"entity_id": entity_id, "label": label, "scenes": results}
+
+    async def _handle_scene_bridge_remove(call: ServiceCall) -> dict:
+        """拆掉某个 HA 实体的场景桥：删网关里这对场景，并清掉绑定。"""
+        from .events import async_set_mapping
+        from .scene_bridge import scene_sids
+
+        coordinator = _coordinator(call.data.get("entry_id"))
+        if coordinator is None:
+            raise ValueError("HDL LINK 尚未配置")
+        entity_id = str(call.data["entity_id"])
+        removed = []
+        for sid in scene_sids(entity_id):
+            resp = await coordinator.gateway.async_scene_delete(sid)
+            removed.append({"sid": sid, "code": str(resp.get("code") or "")})
+            await async_set_mapping(hass, sid, entity_id=None)
+            await asyncio.sleep(1)
+        return {"entity_id": entity_id, "removed": removed}
 
     if not hass.services.has_service(DOMAIN, SERVICE_SCENE_BRIDGE):
         hass.services.async_register(
             DOMAIN,
             SERVICE_SCENE_BRIDGE,
             _handle_scene_bridge,
+            schema=SCENE_BRIDGE_SCHEMA,
+            supports_response=SupportsResponse.OPTIONAL,
+        )
+    if not hass.services.has_service(DOMAIN, SERVICE_SCENE_BRIDGE_REMOVE):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_SCENE_BRIDGE_REMOVE,
+            _handle_scene_bridge_remove,
             schema=SCENE_BRIDGE_SCHEMA,
             supports_response=SupportsResponse.OPTIONAL,
         )

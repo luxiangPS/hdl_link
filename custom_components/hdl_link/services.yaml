@@ -69,3 +69,19 @@ scene_bridge:
       description: 多网关时可指定；只有一个网关时留空。
       selector:
         text:
+
+scene_bridge_remove:
+  name: 拆除场景桥
+  description: 删除该 HA 实体在网关里的「开 / 关」两条场景，并清除它们与实体的绑定。
+  fields:
+    entity_id:
+      name: HA 实体
+      description: 已用「生成场景桥」建过场景的实体。
+      required: true
+      selector:
+        entity:
+    entry_id:
+      name: 配置条目
+      description: 多网关时可指定；只有一个网关时留空。
+      selector:
+        text:

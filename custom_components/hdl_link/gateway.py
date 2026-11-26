@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -25,6 +26,11 @@ from .const import (
 from .protocol import LinkClient, LinkError
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _scene_stamp() -> dict[str, str]:
+    """场景类请求的公共头：真机实测带 id/time_stamp 更稳（Studio 发出的包同样带）。"""
+    return {"id": "0", "time_stamp": str(int(time.time() * 1000))}
 
 
 @dataclass(slots=True)
@@ -179,10 +185,14 @@ class HdlGateway:
         return [o for o in objs if isinstance(o, dict)] if isinstance(objs, list) else []
 
     async def async_scene_add(self, sid: str, name: str) -> dict[str, Any]:
-        """在网关里建一条空动作场景（只当按键通道用：执行时网关广播 scene/status/up）。"""
+        """在网关里建一条空动作场景（只当按键通道用：执行时网关广播 scene/status/up）。
+
+        实测要点：``status`` 必须显式给空数组 ``[]`` 才会被网关持久化；
+        少了这个字段网关只当成临时「正在编辑的场景」，下一次 add 会把上一条顶掉。
+        """
         resp = await self.client.async_request(
             TOPIC_SCENE_ADD.format(gw=self.oid),
-            {"objects": [{"sid": sid, "name": name}]},
+            {**_scene_stamp(), "objects": [{"sid": sid, "name": name, "status": [], "delay": "0"}]},
             timeout=10,
         )
         return resp if isinstance(resp, dict) else {}
@@ -190,7 +200,7 @@ class HdlGateway:
     async def async_scene_delete(self, sid: str) -> dict[str, Any]:
         resp = await self.client.async_request(
             TOPIC_SCENE_DELETE.format(gw=self.oid),
-            {"objects": [{"sid": sid}]},
+            {**_scene_stamp(), "objects": [{"sid": sid}]},
             timeout=10,
         )
         return resp if isinstance(resp, dict) else {}
@@ -198,7 +208,7 @@ class HdlGateway:
     async def async_scene_execute(self, sid: str) -> dict[str, Any]:
         resp = await self.client.async_request(
             TOPIC_SCENE_EXECUTE.format(gw=self.oid),
-            {"objects": [{"sid": sid}]},
+            {**_scene_stamp(), "objects": [{"sid": sid}]},
             timeout=10,
         )
         return resp if isinstance(resp, dict) else {}

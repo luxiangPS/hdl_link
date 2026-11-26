@@ -14,8 +14,12 @@ HDL 网关（实测 MGWIP.430 / fw V03.11.19）对「三方 LINK 设备」只做
 
 场景 sid 规则（实测）
 ----------------------
-14 字节十六进制：``020103`` + 6 字节设备段（任意）+ 5 字节序号段。
-用实体 id 的 md5 前 6 字节做设备段，保证同一实体每次生成的 sid 稳定、可重复创建。
+14 字节十六进制：``020103`` + 6 字节设备段 + 5 字节序号段。
+
+- 设备段取实体 id 的 md5 前 6 字节，保证同一实体稳定；
+- **开/关的区别必须放在序号段**（``01 0001 0001`` / ``01 0002 0001``）。
+  实测：同一对场景如果只在设备段上不同、序号段相同，后建的会把先建的顶掉；
+  序号段不同则两条并存。
 """
 
 from __future__ import annotations
@@ -23,11 +27,11 @@ from __future__ import annotations
 import hashlib
 
 SCENE_PREFIX = "020103"
-SCENE_SUFFIX = "010001"
+SCENE_TAIL = "0001"
 
 
 def scene_sids(entity_id: str) -> tuple[str, str]:
-    """返回 (开灯场景 sid, 关灯场景 sid)，同一实体永远一致。"""
+    """返回 (开场景 sid, 关场景 sid)，同一实体永远一致。"""
     digest = hashlib.md5(entity_id.encode("utf-8")).hexdigest()[:12].upper()
-    base = f"{SCENE_PREFIX}{digest}{SCENE_SUFFIX}"
-    return f"{base}0001", f"{base}0002"
+    base = f"{SCENE_PREFIX}{digest}01"
+    return f"{base}0001{SCENE_TAIL}", f"{base}0002{SCENE_TAIL}"
