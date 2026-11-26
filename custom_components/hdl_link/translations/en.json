@@ -61,13 +61,40 @@
   "options": {
     "step": {
       "init": {
-        "title": "HDL LINK options",
-        "description": "Gateway {host}: device state changes are pushed by the gateway, so no polling is needed. Optionally set a fallback poll interval (seconds); 0 disables polling.",
+        "title": "HDL LINK Options",
+        "description": "Gateway {host}. What do you want to change?",
+        "menu_options": {
+          "basic": "Polling and local secret",
+          "vad": "Driverless reverse control (Studio/panel controls HA)"
+        }
+      },
+      "basic": {
+        "title": "Polling and local secret",
+        "description": "Gateway {host}: state changes are pushed by the gateway. Set a fallback poll interval in seconds (0 = off).",
         "data": {
           "poll_interval": "Fallback poll interval (s, 0 = off)",
-          "local_secret": "Local encryption key (16 chars, optional)"
+          "local_secret": "Local secret (16 chars, optional)"
+        }
+      },
+      "vad": {
+        "title": "Driverless reverse control",
+        "description": "Expose selected HA entities as one LINK local third-party device (A-device) on gateway {host}, so Studio / HDL App / panels can control them and states sync back.\nOnboarding needs the platform-registered mac plus macKey/secret: {hint}.\nSaving with it enabled starts onboarding immediately and retries every 60s.",
+        "data": {
+          "vad_enabled": "Enable reverse control",
+          "vad_device_name": "Device name (shown in HDL)",
+          "vad_mac": "Device MAC (registered)",
+          "vad_secret": "Secret (registered)",
+          "vad_mac_key": "macKey (optional, derived from secret when empty)",
+          "vad_oid": "Device oid (16 hex)",
+          "vad_entities": "HA entities to expose to HDL"
         }
       }
+    },
+    "error": {
+      "vad_mac": "MAC must be 12 hex chars (colons allowed).",
+      "vad_oid": "oid must be 16 hex chars.",
+      "vad_key": "Provide macKey or Secret.",
+      "vad_entities": "Select at least one entity."
     }
   }
 }

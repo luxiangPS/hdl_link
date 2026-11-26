@@ -24,6 +24,7 @@ from vad import (  # noqa: E402
     VadEntity,
     make_sid,
     sign_mac_key,
+    ha_state_to_status,
     _split_udp,
 )
 
@@ -139,6 +140,24 @@ async def main() -> int:
     check("不同 spk 物模型不同",
           make_sid("04E8030100000A01", "light.switch", 1) != make_sid("04E8030100000A01", "curtain.trietex", 1))
     check("mac_key 稳定", sign_mac_key("02AABBCC0102", "s3cret") == sign_mac_key("02AABBCC0102", "s3cret"))
+    check("MAC 归一（冒号/大写）",
+          "".join(c for c in "02:AA:BB:CC:01:02".lower() if c in "0123456789abcdef") == "02aabbcc0102")
+
+    print("[1b] HA 状态 → HDL status")
+    check("灯开+亮度",
+          ha_state_to_status("light.a", "light.dimming",
+                             {"state": "on", "attributes": {"brightness": 153}})
+          == {"on_off": "on", "brightness": "60"})
+    check("窗帘位置",
+          ha_state_to_status("cover.a", "curtain.trietex",
+                             {"state": "open", "attributes": {"current_position": 60}})
+          == {"on_off": "on", "position": "60"})
+    check("开关关",
+          ha_state_to_status("switch.a", "other.common", {"state": "off", "attributes": {}})
+          == {"on_off": "off"})
+    check("温度传感器",
+          ha_state_to_status("sensor.a", "sensor.temperature",
+                             {"state": "23.5", "attributes": {}}) == {"temperature": "23.5"})
 
     print("[2] 入网 → 上报 → 控制 → 上行")
     seen: dict = {}

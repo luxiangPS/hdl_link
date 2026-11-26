@@ -18,6 +18,18 @@ CONF_SCENES: Final = "scenes"        # [{"sid","name"}]
 CONF_POLL_INTERVAL: Final = "poll_interval"
 CONF_LOCAL_SECRET: Final = "local_secret"   # 可选：网关本地加密密钥，用于解析实时上报
 
+# ---------------------------------------------------------------- 无驱动反向控制
+# 把 HA 实体伪装成一台 LINK 本地三方设备（A 设备），Studio / App / 面板可控
+CONF_VAD_ENABLED: Final = "vad_enabled"
+CONF_VAD_DEVICE_NAME: Final = "vad_device_name"
+CONF_VAD_MAC: Final = "vad_mac"           # 平台登记的 mac
+CONF_VAD_SECRET: Final = "vad_secret"     # 平台登记的 secret（用于算 mac_key）
+CONF_VAD_MAC_KEY: Final = "vad_mac_key"   # 可直接填平台给的 mac_key，留空则由 secret 算
+CONF_VAD_OID: Final = "vad_oid"
+CONF_VAD_ENTITIES: Final = "vad_entities"  # 要暴露的 HA entity_id 列表
+
+DEFAULT_VAD_OID: Final = "04E8030100000A01"
+
 DEFAULT_PORT: Final = 8586
 UDP_SEARCH_PORT: Final = 8585           # 本地搜索（广播）端口
 # 秒；纯本地对接（不在网关装驱动）时网关不保证主动上报，默认 5 秒读一次属性

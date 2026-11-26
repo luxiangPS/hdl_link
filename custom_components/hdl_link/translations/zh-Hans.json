@@ -62,12 +62,39 @@
     "step": {
       "init": {
         "title": "HDL LINK 选项",
+        "description": "网关 {host}。选择要修改的内容：",
+        "menu_options": {
+          "basic": "轮询与本地密钥",
+          "vad": "无驱动反向控制（Studio / 面板可控 HA）"
+        }
+      },
+      "basic": {
+        "title": "轮询与本地密钥",
         "description": "网关 {host}：设备状态变化由网关主动上报，无需周期轮询。如需在特殊环境下兜底，可填写轮询间隔（秒）；0 表示关闭。",
         "data": {
           "poll_interval": "兜底轮询间隔（秒，0 = 关闭）",
           "local_secret": "本地加密密钥（16 位，可留空）"
         }
+      },
+      "vad": {
+        "title": "无驱动反向控制",
+        "description": "把勾选的 HA 实体伪装成一台 LINK 本地三方设备（A 设备）接入网关 {host}，Studio / HDL App / 面板即可控制这些实体，状态也会同步回 HDL。\\n入网需要平台登记的 mac 与 macKey/secret：{hint}。\\n勾选启用后保存，集成会立即入网并在失败时每 60 秒重试。",
+        "data": {
+          "vad_enabled": "启用反向控制",
+          "vad_device_name": "设备名称（显示在 HDL 设备表）",
+          "vad_mac": "设备 MAC（平台登记值）",
+          "vad_secret": "Secret（平台登记值）",
+          "vad_mac_key": "macKey（可直接填，留空则用 secret 计算）",
+          "vad_oid": "设备 oid（16 位 hex）",
+          "vad_entities": "要暴露给 HDL 的 HA 实体"
+        }
       }
+    },
+    "error": {
+      "vad_mac": "MAC 需为 12 位十六进制（可带冒号）。",
+      "vad_oid": "oid 需为 16 位十六进制。",
+      "vad_key": "macKey 与 Secret 至少填一个。",
+      "vad_entities": "请至少勾选一个实体。"
     }
   }
 }

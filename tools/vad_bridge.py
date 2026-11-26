@@ -31,7 +31,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "custom_components", "hdl_link"))
 
 from driver_logic import service_calls  # noqa: E402
-from vad import VadBridge, VadDevice, VadEntity, make_sid, sign_mac_key  # noqa: E402
+from vad import VadBridge, VadDevice, VadEntity, ha_state_to_status as ha_to_status, make_sid  # noqa: E402
 
 LOGGER = logging.getLogger("vad_bridge")
 
@@ -77,40 +77,6 @@ class HaRest:
 
 
 # ------------------------------------------------------------------ 状态映射
-def ha_to_status(entity_id: str, spk: str, state: dict | None) -> dict[str, str]:
-    """HA 状态 → HDL status（只填该 spk 认识的键）。"""
-    if not state:
-        return {}
-    value = str(state.get("state", ""))
-    attrs = state.get("attributes") or {}
-    domain = entity_id.split(".")[0] if "." in entity_id else ""
-    out: dict[str, str] = {}
-
-    if spk.startswith("curtain") or domain == "cover":
-        out["on_off"] = {"open": "on", "closed": "off"}.get(value, value if value in ("on", "off") else "")
-        if attrs.get("current_position") is not None:
-            out["position"] = str(attrs["current_position"])
-        return {k: v for k, v in out.items() if v}
-
-    if domain in ("light", "switch", "fan", "input_boolean", "climate", "lock", "valve"):
-        out["on_off"] = "on" if value == "on" else "off"
-        if domain == "light" and attrs.get("brightness") is not None:
-            out["brightness"] = str(round(int(attrs["brightness"]) / 255 * 100))
-        return out
-
-    if domain in ("sensor", "binary_sensor"):
-        key = {
-            "sensor.temperature": "temperature",
-            "sensor.humidity": "humidity",
-            "sensor.light": "illuminance",
-            "sensor.co2": "co2",
-            "sensor.pm25": "pm25",
-            "sensor.tvoc": "tvoc",
-        }.get(spk, "value")
-        out[key] = value
-    return out
-
-
 # ------------------------------------------------------------------ 主流程
 class Bridge:
     def __init__(self, cfg: dict, *, dry_run: bool = False) -> None:
@@ -247,3 +213,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+

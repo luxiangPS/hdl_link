@@ -21,8 +21,16 @@ from .const import (
     CONF_POLL_INTERVAL,
     CONF_PORT,
     CONF_SCENES,
+    CONF_VAD_DEVICE_NAME,
+    CONF_VAD_ENABLED,
+    CONF_VAD_ENTITIES,
+    CONF_VAD_MAC,
+    CONF_VAD_MAC_KEY,
+    CONF_VAD_OID,
+    CONF_VAD_SECRET,
     DEFAULT_POLL_INTERVAL,
     DEFAULT_PORT,
+    DEFAULT_VAD_OID,
     DOMAIN,
     MAX_POLL_INTERVAL,
     MIN_POLL_INTERVAL,
@@ -34,6 +42,7 @@ from .const import (
 from .discovery import LAST_SCAN, async_scan, expand_hosts
 from .gateway import FunctionInfo, HdlGateway, GatewayInfo
 from .protocol import LinkError
+from .vad import sign_mac_key
 
 LOGGER = logging.getLogger(__name__)
 
@@ -409,26 +418,37 @@ class HdlLinkConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class HdlLinkOptionsFlow(OptionsFlow):
-    """已接入后的再配置：改轮询周期。"""
+    """已接入后的再配置：轮询周期 / 本地密钥，以及无驱动反向控制的三方设备身份。"""
 
     def __init__(self) -> None:
         self._functions: list[FunctionInfo] = []
         self._scenes: list[dict[str, Any]] = []
 
+    def _merged(self) -> dict[str, Any]:
+        return {**self.config_entry.data, **self.config_entry.options}
+
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        return self.async_show_menu(
+            step_id="init",
+            menu_options=["basic", "vad"],
+            description_placeholders={"host": str(self.config_entry.data.get(CONF_HOST, ""))},
+        )
+
+    # ---------------------------------------------------------------- 基本项
+    async def async_step_basic(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         if user_input is not None:
-            return self.async_create_entry(data=user_input)
-        merged = {**self.config_entry.data, **self.config_entry.options}
+            return self.async_create_entry(data={**self.config_entry.options, **user_input})
+        merged = self._merged()
         current = merged.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL)
         secret = merged.get(CONF_LOCAL_SECRET, "")
         return self.async_show_form(
-            step_id="init",
+            step_id="basic",
             data_schema=vol.Schema(
                 {
                     vol.Optional(CONF_POLL_INTERVAL, default=current): selector.NumberSelector(
                         selector.NumberSelectorConfig(
-                            min=MIN_POLL_INTERVAL, max=MAX_POLL_INTERVAL, step=1, unit_of_measurement="秒",
-                            mode=selector.NumberSelectorMode.BOX,
+                            min=MIN_POLL_INTERVAL, max=MAX_POLL_INTERVAL, step=1,
+                            unit_of_measurement="秒", mode=selector.NumberSelectorMode.BOX,
                         )
                     ),
                     vol.Optional(CONF_LOCAL_SECRET, default=secret or ""): str,
@@ -436,3 +456,87 @@ class HdlLinkOptionsFlow(OptionsFlow):
             ),
             description_placeholders={"host": self.config_entry.data.get(CONF_HOST, "")},
         )
+
+    # ---------------------------------------------------------------- 反向控制
+    async def async_step_vad(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """无驱动反向控制：填平台登记的 mac / secret（或 macKey），勾要暴露的 HA 实体。"""
+        merged = self._merged()
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            enabled = bool(user_input.get(CONF_VAD_ENABLED, False))
+            mac = _norm_hex(user_input.get(CONF_VAD_MAC) or "")
+            oid = _norm_hex(user_input.get(CONF_VAD_OID) or DEFAULT_VAD_OID)
+            secret = str(user_input.get(CONF_VAD_SECRET) or "").strip()
+            mac_key = str(user_input.get(CONF_VAD_MAC_KEY) or "").strip()
+            entities = [str(e) for e in (user_input.get(CONF_VAD_ENTITIES) or [])]
+
+            if enabled:
+                if len(mac) != 12:
+                    errors[CONF_VAD_MAC] = "vad_mac"
+                if len(oid) != 16:
+                    errors[CONF_VAD_OID] = "vad_oid"
+                if not mac_key and not secret:
+                    errors[CONF_VAD_SECRET] = "vad_key"
+                if not entities:
+                    errors[CONF_VAD_ENTITIES] = "vad_entities"
+            if not errors:
+                if not mac_key and mac and secret:
+                    mac_key = sign_mac_key(mac, secret)
+                payload = {
+                    CONF_VAD_ENABLED: enabled,
+                    CONF_VAD_DEVICE_NAME: str(user_input.get(CONF_VAD_DEVICE_NAME) or "HA Bridge"),
+                    CONF_VAD_MAC: mac,
+                    CONF_VAD_OID: oid,
+                    CONF_VAD_SECRET: secret,
+                    CONF_VAD_MAC_KEY: mac_key,
+                    CONF_VAD_ENTITIES: entities,
+                }
+                return self.async_create_entry(data={**self.config_entry.options, **payload})
+
+        schema = vol.Schema(
+            {
+                vol.Optional(CONF_VAD_ENABLED, default=bool(merged.get(CONF_VAD_ENABLED))):
+                    selector.BooleanSelector(),
+                vol.Optional(CONF_VAD_DEVICE_NAME,
+                             default=str(merged.get(CONF_VAD_DEVICE_NAME) or "HA Bridge")):
+                    selector.TextSelector(),
+                vol.Optional(CONF_VAD_MAC, default=str(merged.get(CONF_VAD_MAC) or "")):
+                    selector.TextSelector(
+                        selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
+                    ),
+                vol.Optional(CONF_VAD_SECRET, default=str(merged.get(CONF_VAD_SECRET) or "")):
+                    selector.TextSelector(
+                        selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+                    ),
+                vol.Optional(CONF_VAD_MAC_KEY, default=str(merged.get(CONF_VAD_MAC_KEY) or "")):
+                    selector.TextSelector(
+                        selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+                    ),
+                vol.Optional(CONF_VAD_OID,
+                             default=str(merged.get(CONF_VAD_OID) or DEFAULT_VAD_OID)):
+                    selector.TextSelector(),
+                vol.Optional(CONF_VAD_ENTITIES, default=list(merged.get(CONF_VAD_ENTITIES) or [])):
+                    selector.EntitySelector(
+                        selector.EntitySelectorConfig(
+                            domain=["light", "switch", "input_boolean", "fan", "cover",
+                                    "sensor", "binary_sensor"],
+                            multiple=True,
+                        )
+                    ),
+            }
+        )
+        return self.async_show_form(
+            step_id="vad",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders={
+                "host": str(self.config_entry.data.get(CONF_HOST, "")),
+                "hint": "secret 与 macKey 填一个即可；只填 secret 时按 (mac+secret) 两次 md5 计算",
+            },
+        )
+
+
+def _norm_hex(value: str) -> str:
+    """把 mac / oid 归一成小写纯 hex（容忍冒号、横线、大写）。"""
+    return "".join(ch for ch in str(value).lower() if ch in "0123456789abcdef")

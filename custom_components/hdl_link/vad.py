@@ -96,6 +96,45 @@ def make_sid(oid: str, spk: str, channel: int = 0) -> str:
     return f"{oid}{model}{channel:04X}0101"
 
 
+def ha_state_to_status(entity_id: str, spk: str, state: dict[str, Any] | None) -> dict[str, str]:
+    """HA 实体状态 → HDL status（只填该 spk 认识的键）。"""
+    if not state:
+        return {}
+    value = str(state.get("state", ""))
+    attrs = state.get("attributes") or {}
+    domain = entity_id.split(".")[0] if "." in entity_id else ""
+    out: dict[str, str] = {}
+
+    if spk.startswith("curtain") or domain == "cover":
+        if value == "open":
+            out["on_off"] = "on"
+        elif value == "closed":
+            out["on_off"] = "off"
+        elif value in ("on", "off"):
+            out["on_off"] = value
+        if attrs.get("current_position") is not None:
+            out["position"] = str(attrs["current_position"])
+        return out
+
+    if domain in ("light", "switch", "fan", "input_boolean", "climate", "lock", "valve"):
+        out["on_off"] = "on" if value == "on" else "off"
+        if domain == "light" and attrs.get("brightness") is not None:
+            out["brightness"] = str(round(int(attrs["brightness"]) / 255 * 100))
+        return out
+
+    if domain in ("sensor", "binary_sensor"):
+        key = {
+            "sensor.temperature": "temperature",
+            "sensor.humidity": "humidity",
+            "sensor.light": "illuminance",
+            "sensor.co2": "co2",
+            "sensor.pm25": "pm25",
+            "sensor.tvoc": "tvoc",
+        }.get(spk, "value")
+        out[key] = value
+    return out
+
+
 @dataclass(slots=True)
 class VadEntity:
     """一个要暴露给 HDL 的功能点。"""

@@ -27,6 +27,7 @@ from homeassistant.helpers import device_registry as dr
 from .const import CONF_GW_ID, DOMAIN, MANUFACTURER
 from .coordinator import HdlCoordinator
 from .protocol import LinkError
+from .vad_export import VadExporter
 
 LOGGER = logging.getLogger(__name__)
 
@@ -103,11 +104,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 LOGGER.warning("周期刷新失败: %s", err)
 
     entry.async_create_background_task(hass, _heartbeat_loop(), f"{DOMAIN}-heartbeat")
+
+    # 无驱动反向控制（可选）：把勾选的 HA 实体作为一台 LINK 三方设备暴露给网关
+    exporter = VadExporter(hass, entry, coordinator.gateway.host)
+    await exporter.async_start()
+    hass.data.setdefault(DOMAIN, {})[f"{entry.entry_id}_vad"] = exporter
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """卸载：停平台、关连接。"""
+    """卸载：停平台、停反向控制、关连接。"""
+    exporter = hass.data.get(DOMAIN, {}).pop(f"{entry.entry_id}_vad", None)
+    if exporter is not None:
+        await exporter.async_stop()
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     coordinator: HdlCoordinator | None = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
     if coordinator is not None:

@@ -51,7 +51,41 @@ Studio / APP / 面板
 没有登记的 mac 会在第 3 步被拒（`code != 200`），这时进程会直接报
 「入网认证无响应 / 入网被拒」，不会假装成功。
 
-## 运行
+## 在集成里填 / 改 macKey 与 secret
+
+入口：**设置 → 设备与服务 → HDL LINK → 配置**（配置条目右侧「配置」按钮），
+选项菜单里有两项：
+
+- 「轮询与本地密钥」：原有 `poll_interval` / `local_secret`
+- 「无驱动反向控制（Studio / 面板可控 HA）」：填三方设备身份
+
+表单字段：
+
+| 字段 | 说明 |
+|---|---|
+| 启用反向控制 | 打开后保存即开始入网；失败每 60 秒重试 |
+| 设备名称 | 显示在 HDL 设备表里的名字 |
+| 设备 MAC | 平台登记的 mac，12 位 hex，容忍冒号/大写（自动归一） |
+| Secret | 平台登记的 secret，密码框 |
+| macKey | **可直接填平台给的 macKey**；留空则用 `(mac+secret)` 两次 md5 自动算 |
+| 设备 oid | 16 位 hex，默认 `04E8030100000A01` |
+| 要暴露给 HDL 的 HA 实体 | 实体选择器（灯 / 开关 / input_boolean / 风扇 / 窗帘 / 传感器 / 二元传感器） |
+
+保存后：选项写入配置条目 → 条目自动重载 → 集成内 `VadExporter` 立刻开始
+「入网 → 上报 oid/sid → 等 Studio 下发」。spk 由实体能力自动判定
+（带亮度的灯 → `light.dimming`，窗帘 → `curtain.trietex`，开关 → `other.common`，
+传感器按 device_class 对应）。
+
+改 secret / macKey：再进同一个菜单改字段保存即可，不需要删条目重建。
+
+## 运行（两种方式，任选）
+
+### A. 集成内运行（推荐）
+
+按上面填完选项，重载 HDL LINK 条目即可，日志关键字 `反向控制` /
+`Studio 控制`。同时保留原有的 HDL → HA 方向。
+
+### B. 独立进程运行（不依赖 HA 集成生命周期）
 
 ```bash
 # 只验入网，不占 TCP（排障第一步）
@@ -75,8 +109,10 @@ python tools/vad_bridge.py tools/vad_config.example.json
 ## 已在仓库里落的代码
 
 - `custom_components/hdl_link/vad.py`：协议与状态机（入网、上报、down/read/up、ECB/CBC 双口径解密）
+- `custom_components/hdl_link/vad_export.py`：集成内运行时（选项 → 入网 → 上报 → 下行转 HA 服务 → 状态上行）
+- `custom_components/hdl_link/config_flow.py`：选项菜单 `basic` / `vad`，macKey / secret 可填可改
 - `tools/vad_bridge.py`：CLI 桥（HA REST 读状态 / 调服务，`driver_logic.service_calls` 复用控制翻译）
-- `tests/test_vad_bridge.py`：本地仿真网关端到端（入网 → 上报 → down → down_reply → read → up），13 项断言全过
+- `tests/test_vad_bridge.py`：本地仿真网关端到端（入网 → 上报 → down → down_reply → read → up），17 项断言全过
 
 ## 验证边界（别含糊）
 
