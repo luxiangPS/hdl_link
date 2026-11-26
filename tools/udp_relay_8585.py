@@ -53,6 +53,11 @@ def main() -> None:
             data, addr = sock.recvfrom(65535)
         except socket.timeout:
             continue
+        except ConnectionResetError:
+            # 对端（HA）已关闭 8585，回包触发 ICMP 端口不可达，UDP 套接字在
+            # Windows 上会把这个 ICMP 报成 10054；忽略后继续等下一次入网。
+            print("对端已关闭端口（入网多半已完成），继续监听", flush=True)
+            continue
         head = data[:80]
         if TOPIC_REQ in head and addr[0] != args.gateway:
             ha = (addr[0], args.port)
