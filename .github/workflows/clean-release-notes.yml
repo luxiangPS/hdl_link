@@ -1,0 +1,21 @@
+name: clean-release-notes
+
+on:
+  push:
+    paths:
+      - ".github/clean_release_notes.py"
+      - ".github/release-notes-clean.json"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  clean:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply sanitized release notes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 .github/clean_release_notes.py

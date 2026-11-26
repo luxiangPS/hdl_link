@@ -2,29 +2,25 @@
 
 把 HDL 主网关下的照明、开关、传感器、窗帘与场景接入 Home Assistant。
 
-**纯本地协议对接，不在网关侧安装任何驱动、不依赖云端。** 集成作为「本地三方应用」直接连网关 TCP 8586，
-按 HDL 开放平台《本地协议对接》文档收发 JSON 主题帧：读功能点 / 属性 / 场景 / 房间，下发控制，周期读回状态。
+**纯本地对接：不在网关侧安装任何驱动、不依赖云端。** 集成直接与网关通信，读设备与场景、下发控制、周期回读状态。
 网关重启、HA 重启都不需要往网关里塞脚本。
 
 ---
 
-## 1. 原理
+## 1. 工作方式
 
 ```
-HA（本集成）  ──TCP 8586──▶  HDL 网关  ──Buspro / KNX / LINK──▶  模块与面板
-     ▲                                                              │
-     └────────── 周期 property/read（+ 可选主动上报） ◀──────────────┘
+Home Assistant（本集成）  ──▶  HDL 网关  ──▶  Buspro / KNX / LINK 模块与面板
+          ▲                                        │
+          └────────────── 周期回读状态 ────────────┘
 ```
 
-- 发现：UDP 8585（组播 `239.0.168.188` + 广播）发 `/user/all/custom/gateway/search`，网关回 `search_reply`，
-  其中 `oid` 就是本集成所有主题里的 `${gw}`
-  > `oid`（如 `010105003DF6F100`）与 `gatewayId`（云 ID，如 `2109…`）不是一个东西，本地主题用的是 **oid**
+- 自动发现局域网内的 HDL 网关，也可手动填写地址
+- 读入网关工程：功能点、属性定义、场景、房间树
+- 控制：写入功能点属性（开关 / 亮度 / 窗帘 / 空调等）
+- 状态：周期回读（默认 5 秒，可配），可选开启网关主动上报
 
-- 读工程：`/user/{oid}/custom/function/list/get`、`function/attribute/get`、`scene/list/get`、`room/list/get`
-- 控制：`/base/{oid}/thing/property/down`
-- 状态：`/base/{oid}/thing/property/read` 周期读（默认 5 秒，可配）
-
-实测（MGWIP.430 / V03.11.19）：66 个功能点、场景列表、房间树全部可读，单次读往返 5~19 ms，控制回执 `code=0 / tag=Success`。
+实测（MGWIP.430 / V03.11.19）：数十个功能点、场景列表、房间树全部可读，控制响应在毫秒级。
 
 ---
 
@@ -34,7 +30,7 @@ HA（本集成）  ──TCP 8586──▶  HDL 网关  ──Buspro / KNX / LIN
 2. 重启 Home Assistant
 3. 设置 → 设备与服务 → 添加集成 → 搜索 **HDL LINK**
 
-无第三方 Python 依赖；`cryptography`（HA 自带）仅在填写「本地加密密钥」时用于解上报帧。
+无第三方 Python 依赖；`cryptography`（HA 自带）用于处理网关的加密上报。
 
 ---
 
@@ -42,9 +38,9 @@ HA（本集成）  ──TCP 8586──▶  HDL 网关  ──Buspro / KNX / LIN
 
 | 步骤 | 内容 |
 |---|---|
-| 1 | 自动搜索网关（UDP 8585），也可手填 IP |
-| 2 | 连接并读网关信息（型号 / oid / MAC） |
-| 3 | 勾选要接入的功能点（按 spk 自动判定平台） |
+| 1 | 自动搜索网关，也可手填地址 |
+| 2 | 连接并读网关信息（型号 / 设备标识 / MAC） |
+| 3 | 勾选要接入的功能点（按设备类型自动判定 HA 平台） |
 | 4 | 可选：本地加密密钥（16 位）。填了才能解网关的加密主动上报；不填就纯轮询 |
 | 5 | 选场景 → 生成按钮实体 |
 
@@ -75,34 +71,24 @@ HA（本集成）  ──TCP 8586──▶  HDL 网关  ──Buspro / KNX / LIN
 
 | 服务 | 作用 |
 |---|---|
-| `hdl_link.bind` | 把 HDL 面板按键 / 场景 / 逻辑的 SID 绑定到 HA 实体：`mode=action` 每按一次执行一次动作（面板键当遥控器），`mode=follow` 跟随属性状态 |
+| `hdl_link.bind` | 把 HDL 面板按键 / 场景 / 逻辑绑定到 HA 实体：`mode=action` 每触发一次执行一次动作（面板键当遥控器），`mode=follow` 跟随状态变化 |
 | `hdl_link.scene_list` | 列出网关场景 + 绑定状态 + 失效绑定，排查「面板按了没反应」 |
+| `hdl_link.scene_bridge` | 为某个 HA 实体在网关里生成一对「开 / 关」场景并自动绑定，实现 HDL 侧控制 HA（见 [docs/无驱动控制HA.md](docs/无驱动控制HA.md)） |
+| `hdl_link.scene_bridge_remove` | 拆除上面生成的场景桥 |
 
 每条 HDL 上行都会在事件总线 fire `hdl_link_hdl_event`，字段 `gateway / kind / sid / name / raw`，可直接在自动化里用。
 
 ---
 
-## 6. 协议速查
+## 6. 无驱动反向控制（HDL 侧控制 HA）
 
-| 用途 | Topic | 说明 |
-|---|---|---|
-| 搜索网关 | `/user/all/custom/gateway/search`（UDP 8585） | 组播 + 广播 |
-| 功能列表 | `/user/{oid}/custom/function/list/get` | JSON |
-| 属性定义 | `/user/{oid}/custom/function/attribute/get` | JSON |
-| 场景列表 / 执行 | `/user/{oid}/custom/scene/list/get` / `scene/execute` | JSON |
-| 房间 | `/user/{oid}/custom/room/list/get` | JSON |
-| 读状态 | `/base/{oid}/thing/property/read` | JSON |
-| 控制 | `/base/{oid}/thing/property/down` | JSON |
-| 状态上报 | `/base/{oid}/thing/property/up` | 未配密钥时是加密二进制 |
+3.x 不再往网关安装驱动。要让 Studio / HDL App / 面板控制 HA 实体，用「场景桥」：
 
-TCP 帧格式：
+1. 调 `hdl_link.scene_bridge`，填 `entity_id`；
+2. 网关里会出现一对「<名称> 开 / <名称> 关」场景，并已自动绑定；
+3. 在 HDL 侧把这对方场景放到面板按键、App 或场景执行里即可。
 
-```
-Topic:/base/{oid}/thing/property/down\r\n
-Length: <body 字节数>\r\n
-\r\n
-{"id":"…","objects":[…],"time_stamp":"…"}
-```
+详细用法、实测结论与限制见 [docs/无驱动控制HA.md](docs/无驱动控制HA.md)。
 
 ---
 
@@ -111,35 +97,30 @@ Length: <body 字节数>\r\n
 2.x 会在网关里自动安装一个 Python「HA 驱动」，用来把 HA 设备反写进 HDL（网关 App/面板可控 HA、HA 状态推到 HDL）。
 这需要往网关塞文件、走 OTA、占用网关资源，还要长期维护驱动版本。
 
-3.0.0 起彻底去掉网关侧驱动，只保留 **HDL → HA** 方向（读、控、事件）。因此：
+3.0.0 起彻底去掉网关侧驱动，只保留 **HDL → HA** 方向（读、控、事件），并用上面的「场景桥」提供反方向控制。因此：
 
 - 不再有「安装集成时检测并安装驱动」
 - 不再有「设备同步（HA → HDL 写入）」面板，`scan / provision / sync` 三个服务一并移除
 - 状态默认靠轮询（5 秒），间隔越小越跟手，代价是网关请求变多
 
-如果你需要「Studio / App / 面板控 HA」，又不想往网关装驱动，走官方《Link 协议接入》的
-**本地三方设备**路径：本进程伪装成一台 A 设备接入网关，控制会点对点落到这条 TCP 连接上。
-实现与验证记录见 [docs/无驱动控制HA.md](docs/无驱动控制HA.md)，运行时用
-`python tools/vad_bridge.py tools/vad_config.example.json`。
-
 ---
 
 ## 8. 已知边界
 
-- **状态实时性**：不配本地密钥时，网关不保证把属性变化推给第三方应用会话，靠轮询兜底；调小间隔可改善
+- **状态实时性**：网关不保证把每个属性变化都推给第三方应用会话，靠轮询兜底；调小间隔可改善
 - **色温 / 颜色**：色温灯目前按可调光接入（亮度可用，色温下发未验证）
-- **进度类数据**：网关的 OTA / 驱动进度上行帧是加密且非 JSON，本集成不解析
+- **进度类数据**：网关的 OTA / 驱动进度上行数据是加密且非结构化，本集成不解析
+- **反向控制**：受网关场景数量上限约束，一条实体占两条场景（详见 docs）
 
 ---
 
 ## 9. 常见问题
 
-**连不上**：确认 8586 可达（`Test-NetConnection <网关IP> -Port 8586`）。实测网关只开放 22 / 8586，没有本地 REST。
+**连不上**：确认 HA 与网关在同一网段、网关地址填写正确；网关只开放管理端口，没有本地 REST 接口。
 
-**控制没反应**：先看日志里 `property/down` 的回执，`code=0` 表示网关已接收，实际动作取决于模块与工程配置；
-sid 是否在功能列表里可用 `hdl_link.scene_list` 或功能列表核查。
+**控制没反应**：先看日志里是否有网关回执；有回执表示网关已接收，实际动作取决于模块与工程配置。
 
-**网关重启后**：集成自动重连（`LinkClient` 内置重连），无需手动重载配置。
+**网关重启后**：集成自动重连，无需手动重载配置。
 
 ---
 
