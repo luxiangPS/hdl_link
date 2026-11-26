@@ -42,7 +42,6 @@ from .const import (
 from .discovery import LAST_SCAN, async_scan, expand_hosts
 from .gateway import FunctionInfo, HdlGateway, GatewayInfo
 from .protocol import LinkError
-from .vad import sign_mac_key
 
 LOGGER = logging.getLogger(__name__)
 
@@ -472,18 +471,24 @@ class HdlLinkOptionsFlow(OptionsFlow):
             mac_key = str(user_input.get(CONF_VAD_MAC_KEY) or "").strip()
             entities = [str(e) for e in (user_input.get(CONF_VAD_ENTITIES) or [])]
 
+            # 设备 mac 是平台登记的 16 位十六进制（网关自身 mac 就是 16 位），
+            # 填了就必须合法，避免关着开关时把错值静默存进 options
+            if mac and len(mac) != 16:
+                errors[CONF_VAD_MAC] = "vad_mac"
+            if len(oid) != 16:
+                errors[CONF_VAD_OID] = "vad_oid"
             if enabled:
-                if len(mac) != 16:
+                if not mac:
                     errors[CONF_VAD_MAC] = "vad_mac"
-                if len(oid) != 16:
-                    errors[CONF_VAD_OID] = "vad_oid"
                 if not mac_key and not secret:
                     errors[CONF_VAD_SECRET] = "vad_key"
                 if not entities:
                     errors[CONF_VAD_ENTITIES] = "vad_entities"
             if not errors:
-                if not mac_key and mac and secret:
-                    mac_key = sign_mac_key(mac, secret)
+                # macKey 优先原样用（平台给的就是 auth.mac_key）；只给 secret 时也先原样，
+                # 真正被拒（124013）时 vad.py 会自动退回 (mac+secret) 两次 md5
+                if not mac_key and secret:
+                    mac_key = secret
                 payload = {
                     CONF_VAD_ENABLED: enabled,
                     CONF_VAD_DEVICE_NAME: str(user_input.get(CONF_VAD_DEVICE_NAME) or "HA Bridge"),
@@ -533,7 +538,7 @@ class HdlLinkOptionsFlow(OptionsFlow):
             errors=errors,
             description_placeholders={
                 "host": str(self.config_entry.data.get(CONF_HOST, "")),
-                "hint": "secret 与 macKey 填一个即可；只填 secret 时按 (mac+secret) 两次 md5 计算",
+                "hint": "secret / macKey 填一个即可，会原样作为 auth.mac_key（被拒时自动退回两次 md5）",
             },
         )
 

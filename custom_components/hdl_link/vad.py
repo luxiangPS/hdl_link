@@ -257,7 +257,49 @@ class VadBridge:
 
     # ------------------------------------------------------------------ 入网
     async def async_onboard(self, timeout: float = 6.0) -> dict[str, Any]:
-        """UDP 8585 入网：等广播 / 主动发认证请求，拿到 gatewayId + localSecret。"""
+        """UDP 8585 入网：先按原值当 auth.mac_key，被拒再退回 md5 口径。
+
+        平台登记的「设备密钥 / macKey」通常就是 auth.mac_key 原值（32 位 hex），
+        直接原样发送即可（实测 MGWIP.430 接受）。老平台若只给 secret，则需
+        (mac+secret) 两次 md5，故先原值、后 md5，避免让用户猜。
+        """
+        keys: list[str] = []
+        if self._mac_key:
+            keys.append(self._mac_key)
+        if self.mac_secret:
+            fallback = sign_mac_key(self.device.mac, self.mac_secret)
+            if fallback not in keys:
+                keys.append(fallback)
+        if not keys:
+            raise VadError("缺少平台给的 macKey / secret，无法入网")
+
+        last_err: VadError | None = None
+        for key in keys:
+            self._mac_key = key
+            body = await self._onboard_once(timeout)
+            code = str(body.get("code", ""))
+            if code in ("200", "0"):
+                self._apply_onboard_reply(body)
+                return body
+            last_err = VadError(f"入网被拒：code={code} {body.get('message', '')}".strip())
+            LOGGER.warning("入网被拒（mac_key=%s…），换下一口径重试", str(key)[:8])
+        raise last_err or VadError("入网失败")
+
+    def _apply_onboard_reply(self, body: dict[str, Any]) -> None:
+        objects = body.get("objects") or {}
+        auth = body.get("auth") or {}
+        self.gateway_id = str(objects.get("gatewayId", ""))
+        self.gateway_oid = str(objects.get("oid", ""))
+        secret = str(auth.get("localSecret") or "")
+        if secret:
+            self.local_secret = secret
+        if objects.get("ip_address"):
+            self.host = str(objects["ip_address"])
+        LOGGER.info("入网成功 gatewayId=%s oid=%s 加密=%s",
+                    self.gateway_id, self.gateway_oid, bool(self.local_secret))
+
+    async def _onboard_once(self, timeout: float = 6.0) -> dict[str, Any]:
+        """发一次认证请求、等一次 request_reply（不判断 code，交由上层重试）。"""
         if self._mac_key is None:
             if not self.mac_secret:
                 raise VadError("缺少 mac_secret（平台登记的 secret），无法计算 mac_key")
@@ -324,20 +366,6 @@ class VadBridge:
             transport.close()
             self._udp = None
 
-        objects = body.get("objects") or {}
-        auth = body.get("auth") or {}
-        code = str(body.get("code", ""))
-        if code not in ("200", "0"):
-            raise VadError(f"入网被拒：code={code} {body.get('message', '')}".strip())
-        self.gateway_id = str(objects.get("gatewayId", ""))
-        self.gateway_oid = str(objects.get("oid", ""))
-        secret = str(auth.get("localSecret") or "")
-        if secret:
-            self.local_secret = secret
-        if objects.get("ip_address"):
-            self.host = str(objects["ip_address"])
-        LOGGER.info("入网成功 gatewayId=%s oid=%s 加密=%s",
-                    self.gateway_id, self.gateway_oid, bool(self.local_secret))
         return body
 
     def _auth_body(self) -> dict[str, Any]:

@@ -66,10 +66,14 @@ Studio / APP / 面板
 | 启用反向控制 | 打开后保存即开始入网；失败每 60 秒重试 |
 | 设备名称 | 显示在 HDL 设备表里的名字 |
 | 设备 MAC | 平台登记的 mac，16 位 hex，容忍冒号/大写（自动归一） |
-| Secret | 平台登记的 secret，密码框 |
-| macKey | **可直接填平台给的 macKey**；留空则用 `(mac+secret)` 两次 md5 自动算 |
+| Secret | 平台登记的 secret，密码框；**原样作为 `auth.mac_key` 发送** |
+| macKey | 平台给的 macKey，优先于 Secret；填了就用它原值 |
 | 设备 oid | 16 位 hex，默认 `04E8030100000A01` |
 | 要暴露给 HDL 的 HA 实体 | 实体选择器（灯 / 开关 / input_boolean / 风扇 / 窗帘 / 传感器 / 二元传感器） |
+
+macKey 口径（实测 MGWIP.430）：平台给的设备密钥就是 `auth.mac_key` **原值**，
+不需要再做 md5。集成先按原值入网，若网关回 `124013 Failure` 会自动退回
+`md5(md5(mac+secret))` 再试一次。
 
 保存后：选项写入配置条目 → 条目自动重载 → 集成内 `VadExporter` 立刻开始
 「入网 → 上报 oid/sid → 等 Studio 下发」。spk 由实体能力自动判定

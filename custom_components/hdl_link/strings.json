@@ -83,8 +83,8 @@
           "vad_enabled": "启用反向控制",
           "vad_device_name": "设备名称（显示在 HDL 设备表）",
           "vad_mac": "设备 MAC（平台登记值）",
-          "vad_secret": "Secret（平台登记值）",
-          "vad_mac_key": "macKey（可直接填，留空则用 secret 计算）",
+          "vad_secret": "平台设备密钥 secret（与 macKey 二选一，原样作为 auth.mac_key）",
+          "vad_mac_key": "macKey（与 secret 二选一，都填以 macKey 为准）",
           "vad_oid": "设备 oid（16 位 hex）",
           "vad_entities": "要暴露给 HDL 的 HA 实体"
         }

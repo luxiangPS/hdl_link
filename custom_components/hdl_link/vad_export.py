@@ -104,7 +104,11 @@ class VadExporter:
 
     @staticmethod
     def mac_key(mac: str, secret: str, explicit: str) -> str:
-        return (explicit or "").strip() or (sign_mac_key(mac, secret) if mac and secret else "")
+        """平台给的 macKey（或 secret）原样当 auth.mac_key；不再预做 md5。
+
+        vad.py 入网时若被拒（124013）会自己退回 (mac+secret) 两次 md5。
+        """
+        return (explicit or "").strip() or (secret or "").strip()
 
     # ---------------------------------------------------------------- 起停
     async def async_start(self) -> None:
@@ -133,6 +137,7 @@ class VadExporter:
             ),
             entities,
             mac_key=key,
+            mac_secret=secret,
             local_secret=None,
             on_down=self._async_on_down,
             state_provider=lambda: {sid: dict(e.status) for sid, e in self._by_sid.items()},

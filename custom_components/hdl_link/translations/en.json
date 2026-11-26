@@ -83,8 +83,8 @@
           "vad_enabled": "Enable reverse control",
           "vad_device_name": "Device name (shown in HDL)",
           "vad_mac": "Device MAC (registered)",
-          "vad_secret": "Secret (registered)",
-          "vad_mac_key": "macKey (optional, derived from secret when empty)",
+          "vad_secret": "Platform secret (either this or macKey, used as auth.mac_key)",
+          "vad_mac_key": "macKey (takes priority when both filled)",
           "vad_oid": "Device oid (16 hex)",
           "vad_entities": "HA entities to expose to HDL"
         }
