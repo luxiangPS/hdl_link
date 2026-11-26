@@ -78,7 +78,7 @@
       },
       "vad": {
         "title": "无驱动反向控制",
-        "description": "把勾选的 HA 实体伪装成一台 LINK 本地三方设备（A 设备）接入网关 {host}，Studio / HDL App / 面板即可控制这些实体，状态也会同步回 HDL。\\n入网需要平台登记的 mac 与 macKey/secret：{hint}。\\n勾选启用后保存，集成会立即入网并在失败时每 60 秒重试。",
+        "description": "把勾选的 HA 实体伪装成一台 LINK 本地三方设备（A 设备）接入网关 {host}，Studio / HDL App / 面板即可控制这些实体，状态也会同步回 HDL。\n入网需要平台登记的 mac 与 macKey/secret：{hint}。\n勾选启用后保存，集成会立即入网并在失败时每 60 秒重试。",
         "data": {
           "vad_enabled": "启用反向控制",
           "vad_device_name": "设备名称（显示在 HDL 设备表）",
