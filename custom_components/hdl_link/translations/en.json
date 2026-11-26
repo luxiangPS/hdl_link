@@ -91,7 +91,7 @@
       }
     },
     "error": {
-      "vad_mac": "MAC must be 12 hex chars (colons allowed).",
+      "vad_mac": "MAC must be 16 hex chars (colons allowed).",
       "vad_oid": "oid must be 16 hex chars.",
       "vad_key": "Provide macKey or Secret.",
       "vad_entities": "Select at least one entity."

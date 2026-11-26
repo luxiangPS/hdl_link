@@ -91,7 +91,7 @@
       }
     },
     "error": {
-      "vad_mac": "MAC 需为 12 位十六进制（可带冒号）。",
+      "vad_mac": "MAC 需为 16 位十六进制（可带冒号）。",
       "vad_oid": "oid 需为 16 位十六进制。",
       "vad_key": "macKey 与 Secret 至少填一个。",
       "vad_entities": "请至少勾选一个实体。"

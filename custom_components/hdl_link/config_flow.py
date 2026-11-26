@@ -473,7 +473,7 @@ class HdlLinkOptionsFlow(OptionsFlow):
             entities = [str(e) for e in (user_input.get(CONF_VAD_ENTITIES) or [])]
 
             if enabled:
-                if len(mac) != 12:
+                if len(mac) != 16:
                     errors[CONF_VAD_MAC] = "vad_mac"
                 if len(oid) != 16:
                     errors[CONF_VAD_OID] = "vad_oid"
