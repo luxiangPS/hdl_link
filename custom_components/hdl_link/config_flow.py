@@ -460,7 +460,8 @@ class HdlLinkOptionsFlow(OptionsFlow):
     # ---------------------------------------------------------------- 反向控制
     async def async_step_vad(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """无驱动反向控制：填平台登记的 mac / secret（或 macKey），勾要暴露的 HA 实体。"""
-        merged = self._merged()
+        # 校验失败重绘表单时，沿用用户刚填的值，避免清空已输入的 mac / secret
+        merged = {**self._merged(), **(user_input or {})}
         errors: dict[str, str] = {}
 
         if user_input is not None:
