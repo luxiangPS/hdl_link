@@ -492,8 +492,8 @@ class HdlLinkOptionsFlow(OptionsFlow):
                 payload = {
                     CONF_VAD_ENABLED: enabled,
                     CONF_VAD_DEVICE_NAME: str(user_input.get(CONF_VAD_DEVICE_NAME) or "HA Bridge"),
-                    CONF_VAD_MAC: mac,
-                    CONF_VAD_OID: oid,
+                    CONF_VAD_MAC: mac.upper(),
+                    CONF_VAD_OID: oid.upper(),
                     CONF_VAD_SECRET: secret,
                     CONF_VAD_MAC_KEY: mac_key,
                     CONF_VAD_ENTITIES: entities,

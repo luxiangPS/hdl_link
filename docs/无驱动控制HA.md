@@ -73,7 +73,20 @@ Studio / APP / 面板
 
 macKey 口径（实测 MGWIP.430）：平台给的设备密钥就是 `auth.mac_key` **原值**，
 不需要再做 md5。集成先按原值入网，若网关回 `124013 Failure` 会自动退回
-`md5(md5(mac+secret))` 再试一次。
+`md5(md5(mac+secret))` 再试一次。设备 MAC 一律按**大写**上报（网关按平台登记值
+逐位比对，小写会回 `124014`）。
+
+### HA 跨网段 / 虚拟机 NAT 时：跑 UDP 中继
+
+LINK 入网固定把 `request_reply` 发到「请求来源 IP 的 8585」。HA 若经 Hyper-V
+Default Switch NAT 出去，源端口被改写（8585 → 随机端口），回包到不了 HA，日志
+表现为「入网认证无响应」。在与网关同网段的机器上跑一次中继即可：
+
+```bash
+python tools/udp_relay_8585.py --gateway 192.168.1.151 --ha 172.26.30.104
+```
+
+HA 那边不用改任何配置，入网成功后中继可以关掉（之后只剩 TCP 8586）。
 
 保存后：选项写入配置条目 → 条目自动重载 → 集成内 `VadExporter` 立刻开始
 「入网 → 上报 oid/sid → 等 Studio 下发」。spk 由实体能力自动判定

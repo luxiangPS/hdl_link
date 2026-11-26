@@ -115,13 +115,13 @@ class VadExporter:
         opts = dict(self.entry.options)
         if not opts.get(CONF_VAD_ENABLED):
             return
-        mac = str(opts.get(CONF_VAD_MAC) or "").strip()
+        mac = str(opts.get(CONF_VAD_MAC) or "").strip().upper()
         secret = str(opts.get(CONF_VAD_SECRET) or "").strip()
         key = self.mac_key(mac, secret, str(opts.get(CONF_VAD_MAC_KEY) or ""))
         if not mac or not key:
             LOGGER.error("反向控制已启用但缺少 mac / macKey / secret，跳过")
             return
-        oid = str(opts.get(CONF_VAD_OID) or DEFAULT_VAD_OID).strip()
+        oid = str(opts.get(CONF_VAD_OID) or DEFAULT_VAD_OID).strip().upper()
         entities = self.build_entities(oid)
         if not entities:
             LOGGER.error("反向控制已启用但没有可暴露的实体")
