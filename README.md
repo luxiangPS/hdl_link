@@ -117,6 +117,11 @@ Length: <body 字节数>\r\n
 - 不再有「设备同步（HA → HDL 写入）」面板，`scan / provision / sync` 三个服务一并移除
 - 状态默认靠轮询（5 秒），间隔越小越跟手，代价是网关请求变多
 
+如果你需要「Studio / App / 面板控 HA」，又不想往网关装驱动，走官方《Link 协议接入》的
+**本地三方设备**路径：本进程伪装成一台 A 设备接入网关，控制会点对点落到这条 TCP 连接上。
+实现与验证记录见 [docs/无驱动控制HA.md](docs/无驱动控制HA.md)，运行时用
+`python tools/vad_bridge.py tools/vad_config.example.json`。
+
 ---
 
 ## 8. 已知边界

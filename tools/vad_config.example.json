@@ -1,0 +1,40 @@
+{
+  "gateway": {
+    "host": "192.168.1.151",
+    "tcp_port": 8586,
+    "udp_port": 8585,
+    "local_secret": ""
+  },
+  "device": {
+    "oid": "04E8030100000A01",
+    "mac": "02AABBCC0102",
+    "secret": "",
+    "name": "HA Bridge",
+    "model": "HA-BRIDGE.430",
+    "spk": "other.common",
+    "image_id": "00000"
+  },
+  "ha": {
+    "base_url": "http://172.26.30.104:8123",
+    "token": ""
+  },
+  "poll_interval": 5,
+  "heartbeat_interval": 30,
+  "entities": [
+    {
+      "name": "客厅灯",
+      "spk": "light.dimming",
+      "entity_id": "light.xu_ni_ke_diao_deng"
+    },
+    {
+      "name": "客厅窗帘",
+      "spk": "curtain.trietex",
+      "entity_id": "cover.xu_ni_chuang_lian"
+    },
+    {
+      "name": "场景总开关",
+      "spk": "other.common",
+      "entity_id": "switch.chang_jing_zong_kai_guan"
+    }
+  ]
+}
