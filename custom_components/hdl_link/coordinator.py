@@ -148,9 +148,9 @@ class HdlCoordinator(DataUpdateCoordinator[dict[str, dict[str, str]]]):
         """HDL 上行事件 → 直接功能绑定。
 
         两条上行通道都走这里：
-        - `/base/{gw}/thing/property/up`：功能点状态上报（body.objects）；
-        - `/user/{gw}/custom/{scene,logic}/status/up`：场景/逻辑执行事件。
-        统一按 **SID** 判断：命中绑定表就直接下发 HA 控制，命不中只记 seen。
+        - 功能点状态上报（加密）；
+        - 场景 / 逻辑执行事件。
+        统一按 **标识** 判断：命中绑定表就直接下发 HA 控制，命不中只记 seen。
         """
         objects = body.get("objects")
         items = objects if isinstance(objects, list) else ([objects] if isinstance(objects, dict) else [])

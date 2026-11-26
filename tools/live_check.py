@@ -1,4 +1,4 @@
-"""真机联通自检：直接使用集成内的 LINK 协议层（不依赖 Home Assistant）。
+"""真机联通自检：直接使用集成内的连接层（不依赖 Home Assistant）。
 
 用法：
     python live_check.py                 # 默认 192.168.1.150
@@ -16,7 +16,7 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 PKG = os.path.abspath(os.path.join(HERE, "..", "custom_components", "hdl_link"))
 
-# 集成包 __init__ 依赖 Home Assistant，这里把纯协议文件复制成临时包来导入
+# 集成包 __init__ 依赖 Home Assistant，这里把纯连接层文件复制成临时包来导入
 _tmp = tempfile.mkdtemp(prefix="hdl_link_core_")
 _shim = os.path.join(_tmp, "hdl_link_core")
 os.makedirs(_shim, exist_ok=True)

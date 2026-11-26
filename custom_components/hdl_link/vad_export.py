@@ -4,8 +4,8 @@
     vad_enabled / vad_device_name / vad_mac / vad_secret / vad_mac_key / vad_oid / vad_entities
 
 行为：
-    入网 → 上报 oid + sid → 收 property/down（调 HA 服务）→ 轮询 HA 状态发 property/up
-网关断线或尚未入网时自动退避重试，不拖垮整个集成。
+        接入 → 上报设备与功能 → 收控制（调 HA 服务）→ 轮询 HA 状态回推
+网关断线或尚未接入时自动退避重试，不拖垮整个集成。
 """
 
 from __future__ import annotations
@@ -104,9 +104,9 @@ class VadExporter:
 
     @staticmethod
     def mac_key(mac: str, secret: str, explicit: str) -> str:
-        """平台给的 macKey（或 secret）原样当 auth.mac_key；不再预做 md5。
+        """平台给的密钥原样使用，不再预做推导。
 
-        vad.py 入网时若被拒（124013）会自己退回 (mac+secret) 两次 md5。
+        vad.py 接入时若被拒，会自己退回默认推导值。
         """
         return (explicit or "").strip() or (secret or "").strip()
 
@@ -218,8 +218,8 @@ class VadExporter:
     async def _async_on_event(self, kind: str, objects: list[dict]) -> None:
         """场景桥：网关广播的场景/逻辑执行事件交给 events 模块的绑定表执行。
 
-        虚拟设备的 property/down 在各版本固件上并不一定会下发（实测网关只回
-        down_reply 不转发帧），所以面板/Studio 真正可用的控制通道是「场景执行」。
+        虚拟设备的控制在各版本固件上并不一定会真的下发（实测网关只回执、
+        不投递），所以面板 / Studio 真正可用的控制通道是「场景执行」。
         """
         from .events import async_handle
 

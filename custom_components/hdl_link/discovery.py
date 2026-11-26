@@ -1,4 +1,4 @@
-"""网关发现：LINK 本地搜索（UDP 广播），必要时回退 TCP 单播探测。
+"""网关发现：本地搜索（广播），必要时回退单播探测。
 
 用户不需要填写网关 IP 或总线地址：集成向局域网广播搜索请求，
 网关应答自身信息（型号、名称、地址、是否主网关等），由用户从列表中挑一台接入。
@@ -36,7 +36,7 @@ def local_ipv4_networks() -> list[ipaddress.IPv4Interface]:
     except OSError:
         pass
 
-    # 兜底：UDP connect 到外部地址以取得默认出口源地址（不发包）
+    # 兜底：先取一次默认出口源地址（不发包）
     try:
         probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         probe.settimeout(0.2)
@@ -101,7 +101,7 @@ def _to_info(obj: dict) -> GatewayInfo | None:
 
 
 def _collect(sock_targets: list[str], timeout: float, port: int, rounds: int = 2) -> list[GatewayInfo]:
-    """向给定地址逐个发送搜索帧并收集应答（同步实现，供 executor 调用）。"""
+    """向给定地址逐个发送搜索请求并收集应答（同步实现，供 executor 调用）。"""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -171,7 +171,7 @@ def udp_unicast_search(
     """逐个地址单播搜索。
 
     广播穿不过虚拟化 NAT（HA 在 NAT 网段时广播只在 NAT 内部打转），
-    但单播 UDP 可以经 NAT 出站并把应答收回来，因此在跨网段部署时用它兜底。
+    但单播探测可以经 NAT 出站并把应答收回来，因此在跨网段部署时用它兜底。
     """
     if not hosts:
         return []
@@ -238,8 +238,8 @@ async def async_scan(
 ) -> list[GatewayInfo]:
     """发现网关。
 
-    · 未指定地址时：用 LINK 本地搜索（UDP 广播）拿网关信息；无应答再回退 TCP 单播扫网段。
-    · 指定了地址（手动输入/校验）时：只对这些地址做 TCP 单播探测。
+    · 未指定地址时：用本地搜索拿网关信息；无应答再回退单播扫描网段。
+    · 指定了地址（手动输入 / 校验）时：只对这些地址做单播探测。
     """
     if extra_hosts:
         hosts = list(dict.fromkeys(extra_hosts))
@@ -267,7 +267,7 @@ async def async_scan(
         hosts.update(str(h) for h in list(net.network.hosts())[:254])
     if not hosts:
         return []
-    # 广播被 NAT/路由器挡住时，先对本机网段做 UDP 单播，比 TCP 扫描快得多
+    # 广播被 NAT / 路由器挡住时，先对本机网段做单播探测，比逐台扫快得多
     try:
         found = await loop.run_in_executor(None, udp_unicast_search, sorted(hosts), min(timeout, 3.0))
     except Exception as err:  # noqa: BLE001

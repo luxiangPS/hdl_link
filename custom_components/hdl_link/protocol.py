@@ -1,12 +1,7 @@
-"""HDL LINK 协议编解码与 TCP 客户端。
+"""本地连接上的报文编解码与客户端封装。
 
-HDL 官方 Link 本地协议（配置走 TCP 8586，控制走 UDP；本集成统一走 TCP 8586，
-因为网关在同一 TCP 信道上同时接受 property 控制报文）：
-
-    Topic:/user/<gw_id>/custom/xxx\\r\\n
-    Length: <body 字节数>\\r\\n
-    \\r\\n
-    {"id": "...", ...}
+本模块负责与 HDL 网关建立本地连接、把字节流切成完整报文、维护请求编号与断线重连。
+报文的具体形态属于实现细节，不在此展开。
 """
 
 from __future__ import annotations
@@ -24,7 +19,7 @@ _HEADER = re.compile(rb"Topic:(.*?)\r\nLength:\s*(\d+)\r\n\r\n")
 _PORT = 8586
 _UP_SUFFIX = "/thing/property/up"
 _DOWN_SUFFIX = "/thing/property/down"
-# HDL 侧动作事件：场景执行、逻辑/按键动作，实测都会以加密帧推到客户端
+# HDL 侧动作事件：场景执行、逻辑 / 按键动作，会主动推到客户端
 _EVENT_SUFFIXES = ("/custom/scene/status/up", "/custom/logic/status/up")
 
 
@@ -33,7 +28,7 @@ def _is_event_topic(topic: str) -> bool:
 
 
 def decrypt_up_frame(raw: bytes, secret: str) -> dict[str, Any] | None:
-    """解开网关的本地加密上报帧（AES-128-CBC，key=iv=本地密钥，整帧密文）。
+    """解开网关的加密上报（密钥由部署方在配置中提供）。
 
     secret 由部署方在配置向导中提供（16 位）。失败时返回 None，由调用方回退到轮询值。
     """
@@ -59,7 +54,7 @@ def decrypt_up_frame(raw: bytes, secret: str) -> dict[str, Any] | None:
 
 
 def encode_frame(topic: str, body: dict[str, Any]) -> bytes:
-    """把 topic + JSON body 封装成一帧。"""
+    """把主题与内容封装成一条报文。"""
     js = json.dumps(body, ensure_ascii=False, separators=(",", ":"))
     raw = js.encode("utf-8")
     head = "Topic:%s\r\nLength: %d\r\n\r\n" % (topic, len(raw))
@@ -67,7 +62,7 @@ def encode_frame(topic: str, body: dict[str, Any]) -> bytes:
 
 
 def decode_frames(buf: bytes) -> tuple[list[tuple[str, bytes]], bytes]:
-    """从字节流里切出完整帧，返回 (帧列表, 剩余未完成字节)。"""
+    """从字节流里切出完整报文，返回 (报文列表, 剩余未完成字节)。"""
     frames: list[tuple[str, bytes]] = []
     pos = 0
     while True:
@@ -77,7 +72,7 @@ def decode_frames(buf: bytes) -> tuple[list[tuple[str, bytes]], bytes]:
         start = match.end()
         size = int(match.group(2))
         if len(buf) - start < size:
-            # 帧不完整，保留从 match 起的原始数据
+            # 报文不完整，保留从 match 起的原始数据
             return frames, buf[match.start():]
         frames.append((match.group(1).decode("utf-8", "ignore"), buf[start:start + size]))
         pos = start + size
@@ -89,11 +84,11 @@ def now_ms() -> str:
 
 
 class LinkError(Exception):
-    """LINK 通信错误。"""
+    """通信错误。"""
 
 
 class LinkClient:
-    """到 HDL 网关的 LINK TCP 客户端，自带编号/匹配与断线重连。"""
+    """到 HDL 网关的本地连接客户端，自带编号 / 匹配与断线重连。"""
 
     def __init__(
         self,
@@ -108,7 +103,7 @@ class LinkClient:
         self.local_secret = (local_secret or "").strip() or None
         # 网关主动上报（已解密）的回调：objects 列表
         self.push_handler: Callable[[list[dict[str, Any]]], None] | None = None
-        # HDL 侧动作事件（场景执行 / 逻辑动作）回调，签名 (topic, body)
+        # HDL 侧动作事件（场景执行 / 逻辑动作）回调，签名 (主题, 内容)
         self.event_handler: Callable[[str, dict[str, Any]], None] | None = None
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
@@ -145,7 +140,7 @@ class LinkClient:
             self._reader_task = asyncio.create_task(
                 self._async_reader(reader, writer, self._generation)
             )
-            LOGGER.debug("HDL LINK 已连接 %s:%s", self.host, self.port)
+            LOGGER.debug("HDL 网关已连接 %s:%s", self.host, self.port)
 
     async def _async_teardown(self) -> None:
         """关掉残留的连接与读协程（不递增 generation 之外的副作用）。"""
@@ -213,7 +208,7 @@ class LinkClient:
             body = None
 
         if body is None:
-            # 网关主动上报为本地加密二进制，用配置的本地密钥解密后再当明文处理
+            # 网关主动上报是加密的，用配置的密钥解密后再当明文处理
             if (
                 topic.endswith(_UP_SUFFIX)
                 or topic.endswith(_DOWN_SUFFIX)
@@ -221,11 +216,11 @@ class LinkClient:
             ) and self.local_secret:
                 body = decrypt_up_frame(raw, self.local_secret)
                 if body is None:
-                    LOGGER.debug("上报帧解密失败，长度 %d", len(raw))
+                    LOGGER.debug("上报解密失败，长度 %d", len(raw))
                     return
             else:
                 if topic.endswith(_UP_SUFFIX) or topic.endswith(_DOWN_SUFFIX) or _is_event_topic(topic):
-                    LOGGER.debug("收到加密帧但未配置本地密钥，跳过: %s", topic)
+                    LOGGER.debug("收到加密上报但未配置密钥，跳过: %s", topic)
                 return
 
         # 网关下发的控制（down）：交给驱动/集成执行，不当成响应或属性上报
@@ -279,7 +274,7 @@ class LinkClient:
         timeout: float | None = None,
         retry: int = 1,
     ) -> dict[str, Any]:
-        """发一帧并等待同 id 的响应。"""
+        """发一条请求并等待同 id 的响应。"""
         payload = dict(body or {})
         timeout = timeout or self.timeout
         last_err: Exception | None = None
@@ -314,9 +309,9 @@ class LinkClient:
     async def async_request_raw(
         self, topic: str, body: dict[str, Any] | None = None, **kw
     ) -> tuple[str, dict[str, Any]]:
-        """返回 (响应 topic, 响应体)。"""
+        """返回 (响应主题, 响应体)。"""
         payload = dict(body or {})
-        # 复用 async_request 的匹配逻辑：这里单独实现以保留 topic
+        # 复用 async_request 的匹配逻辑：这里单独实现以保留响应主题
         timeout = kw.get("timeout") or self.timeout
         await self.async_connect()
         async with self._lock:

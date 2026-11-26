@@ -1,4 +1,4 @@
-"""HDL LINK 集成常量：LINK 协议主题、SPK 类型映射与实体属性键。"""
+"""HDL LINK 集成常量：主题索引、SPK 类型映射与实体属性键。"""
 
 from __future__ import annotations
 

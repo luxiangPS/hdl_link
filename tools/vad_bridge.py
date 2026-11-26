@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""不装网关驱动的「Studio 控 HA」桥：把 HA 实体伪装成 LINK 本地三方设备。
+"""不装网关驱动的「Studio 控 HA」桥：把 HA 实体伪装成网关的本地三方设备。
 
 链路：
 
-    Studio / App / 面板  →  LINK 网关  →  property/down  →  本脚本  →  HA REST  →  HA 实体
-                                              ↑                              │
-                                        property/up  ←  状态轮询  ←────────┘
+    Studio / App / 面板  →  网关  →  控制下发  →  本脚本  →  HA REST  →  HA 实体
+                                              ↑                        │
+                                         状态回推  ←  状态轮询  ←────┘
 
 用法：
 
     python tools/vad_bridge.py vad_config.json
-    python tools/vad_bridge.py vad_config.json --auth-only   # 只验入网
+        python tools/vad_bridge.py vad_config.json --auth-only   # 只验接入
     python tools/vad_bridge.py vad_config.json --dry-run     # 不调 HA，只打印控制
 
 配置见同目录 vad_config.example.json。

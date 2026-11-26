@@ -486,7 +486,7 @@ class HdlLinkOptionsFlow(OptionsFlow):
                     errors[CONF_VAD_ENTITIES] = "vad_entities"
             if not errors:
                 # macKey 优先原样用（平台给的就是 auth.mac_key）；只给 secret 时也先原样，
-                # 真正被拒（124013）时 vad.py 会自动退回 (mac+secret) 两次 md5
+                # 被网关拒绝时 vad.py 会自动退回另一种密钥口径
                 if not mac_key and secret:
                     mac_key = secret
                 payload = {
@@ -538,7 +538,7 @@ class HdlLinkOptionsFlow(OptionsFlow):
             errors=errors,
             description_placeholders={
                 "host": str(self.config_entry.data.get(CONF_HOST, "")),
-                "hint": "secret / macKey 填一个即可，会原样作为 auth.mac_key（被拒时自动退回两次 md5）",
+                "hint": "secret 与 macKey 填一个即可；被拒时会自动尝试另一种口径",
             },
         )
 

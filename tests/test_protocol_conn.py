@@ -27,7 +27,7 @@ async def main():
 
     async def handler(reader, writer):
         accepted.append(1)
-        # 只推一帧普通明文上报，然后保持连接
+        # 只推一条普通明文上报，然后保持连接
         writer.write(protocol.encode_frame(
             "/base/TESTGW/thing/property/up",
             {"objects": [{"sid": "AAA", "status": [{"key": "on_off", "value": "on"}]}]},

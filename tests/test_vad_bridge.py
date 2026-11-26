@@ -1,7 +1,7 @@
 """无驱动方案（LINK 本地三方设备）端到端自检。
 
 用本地仿真网关扮演 HDL 网关，跑完整七步：
-入网认证 → 上报设备 → 上报功能 → 下发控制 → down_reply → 读状态 → 状态上行。
+接入认证 → 上报设备 → 上报功能 → 下发控制 → 回执 → 读状态 → 状态上行。
 
     python tests/test_vad_bridge.py
 """
@@ -45,7 +45,7 @@ def head(topic, body):
 
 
 async def udp_gateway(ready: asyncio.Event, seen: dict):
-    """UDP 入网：收到 request 就回 request_reply（认证通过 + localSecret）。"""
+    """UDP 接入：收到请求就回应答（认证通过 + 本地密钥）。"""
 
     class Proto(asyncio.DatagramProtocol):
         def connection_made(self, transport):  # noqa: N805
@@ -75,7 +75,7 @@ async def udp_gateway(ready: asyncio.Event, seen: dict):
 
 
 class TcpGateway:
-    """TCP 仿真网关：收上报、发 down/read、校验 reply。"""
+    """仿真网关（连接侧）：收上报、下发控制与读取、校验应答。"""
 
     def __init__(self):
         self.frames: list[tuple[str, dict]] = []

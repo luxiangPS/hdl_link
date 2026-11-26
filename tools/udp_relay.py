@@ -1,24 +1,20 @@
-"""LINK 入网 UDP 中继（8585）——给 HA 跨网段/NAT 环境兜底。
+"""接入阶段的中继——给 HA 跨网段 / NAT 环境兜底。
 
 为什么需要：
-    LINK 的 A 设备入网靠 UDP 8585 一发一收。网关固定把
-    `network_access/request_reply` 发到「请求来源 IP 的 8585 端口」。
-    如果 HA 跑在虚拟机上、经 Hyper-V Default Switch NAT 出去，源端口会被
-    改写（如 8585 → 49863），网关的回包就再也到不了 HA，集成日志表现为
-    「入网认证无响应」。
+    设备接入阶段是一次「一问一答」，而网关会把应答发回「请求来源地址的同端口」。
+    如果 HA 跑在虚拟机上、经 NAT 出去，源端口会被改写，应答就再也到不了 HA，
+    集成日志表现为「认证无响应」。
 
 怎么用：
-    在**与网关同网段的机器**上跑本脚本（Windows / Linux / 树莓派都行）：
-        python udp_relay_8585.py --gateway 192.168.1.151 --ha 172.26.30.104
-    脚本监听本机 8585：
-        - 收到 HA 发出的 network_access/request（HA 的广播副本会落到同网段机器）
-          → 原样转发给网关
-        - 收到网关回的 request_reply
-          → 原样回灌给 HA 的 8585
-    HA 集成那边不用改任何配置，重试时就能收到 reply。
+    在与网关同网段的机器上跑本脚本（Windows / Linux / 树莓派都行）：
+        python udp_relay.py --gateway <网关IP> --ha <HA 的IP>
+    脚本监听本机固定端口：
+        - 收到 HA 发出的接入请求 → 原样转发给网关
+        - 收到网关返回的应答 → 原样回灌给 HA
+    HA 集成那边不用改任何配置，重试时就能收到应答。
 
-注意：窗口需常开（或做成开机自启/服务）。入网成功后就只有 TCP 8586，中继
-可以停掉；网关重连或重启后若需要重新入网，再把它开起来。
+注意：窗口需常开（或做成开机自启 / 服务）。接入成功后中继可以停掉；
+网关重连或重启后若需要重新接入，再把它开起来。
 """
 
 from __future__ import annotations
@@ -32,10 +28,10 @@ TOPIC_REPLY = b"network_access/request_reply"
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="LINK 入网 UDP 8585 中继")
+    ap = argparse.ArgumentParser(description="接入阶段的中继（UDP）")
     ap.add_argument("--gateway", default="192.168.1.151", help="网关 IP")
     ap.add_argument("--ha", default=None, help="HA 的 IP（不给则按收到的请求来源学习）")
-    ap.add_argument("--port", type=int, default=8585, help="监听端口（默认 8585）")
+    ap.add_argument("--port", type=int, default=8585, help="监听端口")
     ap.add_argument("--seconds", type=int, default=0, help="运行时长，0 = 一直跑")
     args = ap.parse_args()
 
@@ -54,9 +50,9 @@ def main() -> None:
         except socket.timeout:
             continue
         except ConnectionResetError:
-            # 对端（HA）已关闭 8585，回包触发 ICMP 端口不可达，UDP 套接字在
-            # Windows 上会把这个 ICMP 报成 10054；忽略后继续等下一次入网。
-            print("对端已关闭端口（入网多半已完成），继续监听", flush=True)
+            # 对端（HA）已关闭对应端口，回包会触发 ICMP 端口不可达；
+            # Windows 上表现为 10054，忽略后继续等下一次接入。
+            print("对端已关闭端口（接入多半已完成），继续监听", flush=True)
             continue
         head = data[:80]
         if TOPIC_REQ in head and addr[0] != args.gateway:

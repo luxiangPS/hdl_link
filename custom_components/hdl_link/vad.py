@@ -1,20 +1,9 @@
-"""LINK 本地三方设备（A 设备）接入：不装网关驱动的「反向控制」通道。
+"""本地三方设备（A 设备）接入：不装网关驱动的「反向控制」通道。
 
-官方文档《Link 协议接入》给出的本地三方对接流程（无需网关侧驱动文件）：
+接入按开放平台的本地三方设备方式完成：先完成设备认证，再上报设备与功能清单，
+之后接收网关下发的控制与广播事件，并主动上报状态。
 
-    1. 三方设备在 UDP 8585 上监听入网广播
-       /user/all/custom/device/network_access/broadcast
-    2. 收到广播后向网关发 /user/all/custom/device/network_access/request（UDP 点对点）
-       网关代理认证后回 .../request_reply，带 gatewayId / oid / localSecret
-    3. TCP 8586 连上网关，上报设备列表
-       /user/ipc/custom/device/list/upload
-    4. 上报功能列表
-       /base/{oid}/thing/topo/list/upload
-    5. 之后 Studio / App / 面板的控制会以 /base/{oid}/thing/property/down
-       点对点推到这条 TCP 连接（这就是「不广播也能收到控制」的原因）
-    6. 设备主动上报状态 /base/{oid}/thing/property/up
-
-本模块只做协议与状态机，回调由调用方注入，不依赖 Home Assistant，便于单测。
+本模块只做连接与状态机，回调由调用方注入，不依赖 Home Assistant，便于单测。
 """
 
 from __future__ import annotations
@@ -85,7 +74,7 @@ SPK_ATTRS: dict[str, list[dict[str, Any]]] = {
 
 
 def sign_mac_key(mac: str, secret: str) -> str:
-    """(mac+secret) 的两次 md5，官方入网 auth.mac_key 口径。"""
+    """平台未直接给出设备密钥时使用的默认推导方式。"""
     first = hashlib.md5(f"{mac}{secret}".encode("utf-8")).hexdigest()
     return hashlib.md5(first.encode("utf-8")).hexdigest()
 
@@ -169,7 +158,7 @@ class VadDevice:
 
 
 class VadError(Exception):
-    """入网 / 上报 / 控制链路错误。"""
+    """接入 / 上报 / 控制链路错误。"""
 
 
 def _aes(data: bytes, key: bytes, *, mode: str, encrypt: bool) -> bytes:
@@ -191,7 +180,7 @@ def _unpad(plain: bytes) -> bytes:
 
 
 def decrypt_auto(raw: bytes, secret: str | None) -> dict[str, Any] | None:
-    """把一帧 body 解成 dict：先当明文 JSON，再按 ECB / CBC 解密（两种口径都试）。"""
+    """把收到的内容解成 dict：先当明文，再按两种加密口径各试一次。"""
     if not raw:
         return None
     try:
@@ -215,7 +204,7 @@ def decrypt_auto(raw: bytes, secret: str | None) -> dict[str, Any] | None:
 
 
 class VadBridge:
-    """A 设备侧 LINK 客户端：入网 → 上报 → 收 down → 回 reply → 推 up。"""
+    """三方设备侧客户端：接入 → 上报 → 收控制 → 回执 → 推状态。"""
 
     def __init__(
         self,
@@ -241,7 +230,7 @@ class VadBridge:
         self._mac_key = mac_key
         self.tcp_port = tcp_port
         self.udp_port = udp_port
-        # 网关侧 8585；本机与网关同机测试时可分开（真实部署两边都是 8585）
+        # 网关侧端口；本机与网关同机测试时可分开（真实部署两边一致）
         self.remote_udp_port = remote_udp_port or udp_port
         self.local_secret = (local_secret or "").strip() or None
         self.on_down = on_down
@@ -257,13 +246,12 @@ class VadBridge:
         self._seq = 0
         self._udp: asyncio.DatagramProtocol | None = None
 
-    # ------------------------------------------------------------------ 入网
+    # ------------------------------------------------------------------ 接入
     async def async_onboard(self, timeout: float = 6.0) -> dict[str, Any]:
-        """UDP 8585 入网：先按原值当 auth.mac_key，被拒再退回 md5 口径。
+        """完成设备接入：先按原值当设备密钥，被拒再退回推导值。
 
-        平台登记的「设备密钥 / macKey」通常就是 auth.mac_key 原值（32 位 hex），
-        直接原样发送即可（实测 MGWIP.430 接受）。老平台若只给 secret，则需
-        (mac+secret) 两次 md5，故先原值、后 md5，避免让用户猜。
+        平台登记的设备密钥通常就是原值，直接原样发送即可（实测 MGWIP.430 接受）。
+        老平台若只给 secret，则需要按默认方式推导，故先原值、后推导，避免让用户猜。
         """
         keys: list[str] = []
         if self._mac_key:
@@ -325,7 +313,7 @@ class VadBridge:
                 if topic == TOPIC_NET_ACCESS_REPLY and not reply_fut.done():
                     reply_fut.set_result(body)
                 elif topic == TOPIC_NET_ACCESS_BCAST:
-                    # 网关允许入网：只认自己的 mac，然后发起认证请求
+                    # 网关允许接入：只认自己的设备标识，然后发起认证请求
                     slave_mac = str((body.get("objects") or {}).get("slave_mac") or "")
                     if slave_mac and slave_mac.lower() != self.device.mac.lower():
                         return
@@ -351,7 +339,7 @@ class VadBridge:
                                             socket.inet_aton("0.0.0.0")))
             except OSError:
                 LOGGER.debug("加入组播 %s 失败（部分网卡不支持，可只用广播）", MULTICAST_ADDR)
-            # 主动一脚：不等广播也能触发认证（网关侧已开启入网时有响应）
+            # 主动触发一次：不等广播也能发起认证（网关侧已开启接入时有响应）
             payload = _udp_frame(TOPIC_NET_ACCESS_REQ, self._auth_body())
             for target in (self.host, "255.255.255.255", MULTICAST_ADDR):
                 try:
@@ -362,7 +350,7 @@ class VadBridge:
                 body = await asyncio.wait_for(reply_fut, timeout=timeout)
             except asyncio.TimeoutError as err:
                 raise VadError(
-                    "入网认证无响应：检查网关是否处于入网状态、设备 mac 是否已在平台登记"
+                    "认证无响应：检查网关是否处于接入状态、设备标识是否已在平台登记"
                 ) from err
         finally:
             transport.close()
@@ -396,7 +384,7 @@ class VadBridge:
             },
         }
 
-    # ------------------------------------------------------------------ TCP
+    # ------------------------------------------------------------------ 连接
     async def async_connect(self) -> None:
         try:
             self._reader, self._writer = await asyncio.wait_for(
@@ -456,7 +444,7 @@ class VadBridge:
             return
         if topic.endswith("/custom/scene/status/up") or topic.endswith("/custom/logic/status/up"):
             # 场景/逻辑执行是网关广播事件：面板按键、Studio、App 触发场景后都会到这里。
-            # 这是「无驱动反向控制」除了 property/down 之外的第二条控制通道。
+            # 这是「无驱动反向控制」的第二条控制通道。
             kind = "scene" if "/custom/scene/" in topic else "logic"
             objects = body.get("objects") or []
             if isinstance(objects, dict):
@@ -630,13 +618,13 @@ def _split_udp(data: bytes) -> tuple[str, dict[str, Any] | None]:
 
 
 def _udp_frame(topic: str, body: dict[str, Any]) -> bytes:
-    """UDP 报文与 TCP 同格式（Topic/Length + JSON），用于入网握手。"""
+    """用于接入握手的单播报文封包。"""
     return encode_frame(topic, body)
 
 
 async def async_probe_auth(host: str, device: VadDevice, secret: str,
                            udp_port: int = UDP_PORT, timeout: float = 6.0) -> dict[str, Any]:
-    """只验证入网是否通过（不占 TCP），排障用。"""
+    """只验证接入是否通过（不占用连接），排障用。"""
     bridge = VadBridge(host, device, [], mac_secret=secret, udp_port=udp_port)
     try:
         return await bridge.async_onboard(timeout=timeout)

@@ -1,4 +1,4 @@
-"""HDL 网关的 LINK 协议封装：发现、读工程、读写属性、执行场景。"""
+"""HDL 网关能力封装：发现、读工程、读写属性、执行场景。"""
 
 from __future__ import annotations
 
@@ -77,7 +77,7 @@ class HdlGateway:
     # -------------------------------------------------------------- 发现
     @staticmethod
     async def async_search(host: str, port: int = 8586, timeout: float = 4.0) -> GatewayInfo | None:
-        """LINK 广播搜索：对指定主机发 /user/all/custom/gateway/search。"""
+        """本地搜索：对指定主机发起一次网关搜索。"""
         client = LinkClient(host, port, timeout=timeout)
         try:
             resp = await client.async_request(TOPIC_GATEWAY_SEARCH, timeout=timeout)
